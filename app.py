@@ -20,12 +20,39 @@ load_dotenv()
 # Initialize the Dash app with Bootstrap theme
 app = dash.Dash(
     __name__,
-    external_stylesheets=[dbc.themes.FLATLY],
-    title="AroundTheTrees Dashboard"
+    external_stylesheets=[dbc.themes.FLATLY, dbc.icons.FONT_AWESOME],
+    title="US Tree Dashboard"
 )
 
 # For Gunicorn deployment
 server = app.server
+
+# Navigation bar with links
+navbar = dbc.Navbar(
+    dbc.Container([
+        dbc.Row([
+            dbc.Col([
+                html.I(className="fas fa-tree me-2"),
+                dbc.NavbarBrand("US Tree Dashboard", className="ms-2")
+            ]),
+        ], align="center"),
+        dbc.Row([
+            dbc.Col([
+                dbc.Nav([
+                    dbc.NavItem(dbc.NavLink("Overview", href="#overview")),
+                    dbc.NavItem(dbc.NavLink("Distribution", href="#distribution")),
+                    dbc.NavItem(dbc.NavLink("Species", href="#species")),
+                    dbc.NavItem(dbc.NavLink("Health", href="#health")),
+                    dbc.NavItem(dbc.NavLink("Organizations", href="#organizations")),
+                    dbc.NavItem(dbc.NavLink("Analysis", href="#analysis")),
+                ], navbar=True)
+            ])
+        ])
+    ]),
+    color="primary",
+    dark=True,
+    className="mb-4"
+)
 
 # Define charitable organizations
 CHARITABLE_ORGS = [
@@ -474,5 +501,151 @@ def update_dashboard(
 
     return summary_cards, charts, map_component
 
+# Main visualization components
+def create_map_section():
+    return html.Div([
+        html.H2("Geographic Distribution", id="distribution"),
+        dbc.Row([
+            dbc.Col([
+                dcc.Graph(id="tree-map"),
+            ], width=8),
+            dbc.Col([
+                dbc.Card([
+                    dbc.CardHeader("Distribution Insights"),
+                    dbc.CardBody([
+                        html.Div(id="distribution-insights")
+                    ])
+                ])
+            ], width=4)
+        ])
+    ], className="mb-4")
+
+def create_species_section():
+    return html.Div([
+        html.H2("Species Analysis", id="species"),
+        dbc.Row([
+            dbc.Col([
+                dcc.Graph(id="species-chart"),
+            ], width=8),
+            dbc.Col([
+                dbc.Card([
+                    dbc.CardHeader("Species Insights"),
+                    dbc.CardBody([
+                        html.Div(id="species-insights")
+                    ])
+                ])
+            ], width=4)
+        ])
+    ], className="mb-4")
+
+def create_health_section():
+    return html.Div([
+        html.H2("Health Assessment", id="health"),
+        dbc.Row([
+            dbc.Col([
+                dcc.Graph(id="health-chart"),
+            ], width=8),
+            dbc.Col([
+                dbc.Card([
+                    dbc.CardHeader("Health Insights"),
+                    dbc.CardBody([
+                        html.Div(id="health-insights")
+                    ])
+                ])
+            ], width=4)
+        ])
+    ], className="mb-4")
+
+# Organization section
+def create_org_section():
+    org_cards = []
+    for org in CHARITABLE_ORGS:
+        org_cards.append(
+            dbc.Col(
+                dbc.Card([
+                    dbc.CardHeader(org['name']),
+                    dbc.CardBody([
+                        html.P(org['description']),
+                        html.P(f"Impact: {org['impact']}"),
+                        dbc.ButtonGroup([
+                            dbc.Button("Donate", color="success", href=org['donate_url'], target="_blank"),
+                            dbc.Button("Learn More", color="info", href=org['learn_more'], target="_blank")
+                        ])
+                    ])
+                ]),
+                width=4
+            )
+        )
+    return html.Div([
+        html.H2("Supporting Organizations", id="organizations"),
+        dbc.Row(org_cards)
+    ], className="mb-4")
+
+# Main app layout
+app.layout = html.Div([
+    navbar,
+    dbc.Container([
+        html.H1("US Tree Dashboard", id="overview", className="text-center mb-4"),
+        create_stats_cards(),
+        filter_panel,
+        create_map_section(),
+        create_species_section(),
+        create_health_section(),
+        create_org_section(),
+        html.Footer([
+            html.Hr(),
+            html.P("© 2025 US Tree Dashboard. Data sourced from US Forest Service and Environmental Protection Agency.",
+                  className="text-center text-muted")
+        ])
+    ], fluid=True)
+])
+
+# Callback to update stats
+@app.callback(
+    [Output("total-trees-stat", "children"),
+     Output("species-count-stat", "children"),
+     Output("health-score-stat", "children"),
+     Output("canopy-coverage-stat", "children")],
+    [Input("state-filter", "value"),
+     Input("city-filter", "value"),
+     Input("species-filter", "value"),
+     Input("health-filter", "value")]
+)
+def update_stats(state, city, species, health):
+    # TODO: Replace with actual data calculations
+    return "1.2M", "156", "85%", "31%"
+
+# Callback to update map
+@app.callback(
+    Output("tree-map", "figure"),
+    [Input("state-filter", "value"),
+     Input("city-filter", "value"),
+     Input("species-filter", "value"),
+     Input("health-filter", "value")]
+)
+def update_map(state, city, species, health):
+    # Create sample map visualization
+    df = pd.DataFrame({
+        'lat': np.random.uniform(25, 49, 100),
+        'lon': np.random.uniform(-125, -70, 100),
+        'size': np.random.uniform(10, 50, 100)
+    })
+    
+    fig = px.scatter_mapbox(
+        df,
+        lat='lat',
+        lon='lon',
+        size='size',
+        zoom=3,
+        title="Tree Distribution Map"
+    )
+    
+    fig.update_layout(
+        mapbox_style="carto-positron",
+        margin={"r": 0, "t": 30, "l": 0, "b": 0}
+    )
+    
+    return fig
+
 if __name__ == '__main__':
-    app.run_server(debug=True)
+    app.run_server(debug=True, host='0.0.0.0', port=8050)

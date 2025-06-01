@@ -11,18 +11,30 @@ An interactive dashboard for analyzing US tree data with machine learning insigh
 ## 🎯 Features
 
 ### 🗺️ Interactive Visualization
-- Real-time tree location mapping
-- County-level canopy coverage analysis
-- Dynamic species distribution charts
-- Tree health status visualization
+- Real-time tree location mapping with interactive filters
+- County-level canopy coverage analysis with insights
+- Dynamic species distribution charts and diversity metrics
+- Tree health status visualization with trend analysis
+- Advanced navigation with section anchors
 - Responsive design for all devices
+- Integrated charitable organization information
 
-### 📊 Data Analysis
+### 📊 Data Analysis & ML Capabilities
 - City-level tree inventories from 63 major US cities
-- State and county-level canopy coverage metrics
-- Species diversity analysis
-- Tree health distribution statistics
+- State and county-level canopy coverage metrics with historical trends
+- Species diversity analysis with Shannon diversity index
+- Tree health distribution statistics with predictive indicators
 - DBH (Diameter at Breast Height) analytics
+- Environmental impact assessments
+- Interactive Jupyter notebooks for deep analysis
+- Machine Learning Components:
+  - Tree health prediction using Random Forest models
+  - Growth forecasting with environmental factor consideration
+  - Environmental impact calculations
+  - Optimal planting location recommendations
+  - Model persistence and reusability
+  - AutoML capabilities with Optuna
+  - Experiment tracking with MLflow
 
 ### 🔍 Advanced Filtering
 - State and city selection
