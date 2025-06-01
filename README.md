@@ -5,10 +5,20 @@
 ![Dash](https://img.shields.io/badge/dash-2.9.3-blue.svg)
 ![Docker](https://img.shields.io/badge/docker-compose-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
+![OpenAI](https://img.shields.io/badge/OpenAI-GPT--4-brightgreen.svg)
 
-An interactive dashboard for analyzing US tree data with machine learning insights. This project combines geospatial analysis using GDAL with modern web technologies to provide comprehensive visualization and analysis of tree distribution across the United States. Built with a focus on performance and usability, it offers both a web interface and Jupyter notebook environment for deep analysis.
+An interactive dashboard for analyzing US tree data with machine learning insights. This project combines geospatial analysis using GDAL with modern web technologies and AI-powered analytics to provide comprehensive visualization and analysis of tree distribution across the United States. Built with a focus on performance and usability, it offers both a web interface and Jupyter notebook environment for deep analysis.
 
 ## 🎯 Features
+
+### 🤖 AI-Powered Analysis
+- Intelligent pattern recognition in tree distribution
+- Species diversity insights with ecological context
+- Smart health trend analysis with recommendations
+- Environmental impact predictions
+- AI-guided urban forestry recommendations
+- Natural language query interface for data exploration
+- Context-aware visualization suggestions
 
 ### 🗺️ Interactive Visualization
 - Real-time tree location mapping with interactive filters
@@ -35,6 +45,9 @@ An interactive dashboard for analyzing US tree data with machine learning insigh
   - Model persistence and reusability
   - AutoML capabilities with Optuna
   - Experiment tracking with MLflow
+  - GPT-4 powered pattern analysis
+  - AI-assisted data interpretation
+  - Smart outlier detection and analysis
 
 ### 🔍 Advanced Filtering
 - State and city selection
@@ -47,6 +60,7 @@ An interactive dashboard for analyzing US tree data with machine learning insigh
 - **Frontend**: Dash, Plotly
 - **Backend**: Python, Flask (via Dash)
 - **Data Processing**: Pandas, GeoPandas
+- **AI & ML**: OpenAI GPT-4, scikit-learn, LightGBM, XGBoost
 - **Deployment**: Gunicorn, Whitenoise
 - **Database**: PostgreSQL, SQLAlchemy
 - **Caching**: Redis
@@ -61,6 +75,7 @@ An interactive dashboard for analyzing US tree data with machine learning insigh
 - Git
 - 4GB RAM minimum (8GB recommended)
 - 20GB free disk space
+- OpenAI API key for AI features
 
 ### Quick Start
 
@@ -70,12 +85,23 @@ An interactive dashboard for analyzing US tree data with machine learning insigh
    cd us-tree-dashboard
    ```
 
-2. Start the main dashboard:
+2. Set up environment variables:
+   ```bash
+   copy .env.example .env  # Windows
+   cp .env.example .env    # Linux/Mac
+   ```
+   
+3. Configure your OpenAI API key in .env:
+   ```
+   OPENAI_API_KEY=your_api_key_here
+   ```
+
+4. Start the main dashboard:
    ```bash
    docker-compose up --build -d
    ```
 
-3. (Optional) Start the Jupyter environment for analysis:
+5. (Optional) Start the Jupyter environment for analysis:
    ```bash
    docker-compose -f docker-compose-jupyter.yml up --build -d
    ```
