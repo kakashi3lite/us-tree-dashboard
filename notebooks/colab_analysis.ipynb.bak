@@ -1,0 +1,393 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "id": "7e2d95fa",
+   "metadata": {},
+   "source": [
+    "# 🌳 US Tree Dashboard Analysis\n",
+    "\n",
+    "[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/kakashi3lite/us-tree-dashboard/blob/main/notebooks/colab_analysis.ipynb)\n",
+    "\n",
+    "This notebook provides interactive analysis of tree distribution, health patterns, and environmental impact across the United States.\n",
+    "\n",
+    "## Setup\n",
+    "First, let's set up our environment by cloning the repository and installing dependencies:"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "0cb345f8",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Check if running in Colab\n",
+    "try:\n",
+    "    import google.colab\n",
+    "    IN_COLAB = True\n",
+    "except:\n",
+    "    IN_COLAB = False\n",
+    "\n",
+    "if IN_COLAB:\n",
+    "    # Clone the repository\n",
+    "    !git clone https://github.com/kakashi3lite/us-tree-dashboard.git\n",
+    "    %cd us-tree-dashboard\n",
+    "    \n",
+    "    # Install required packages\n",
+    "    !pip install -r requirements.txt\n",
+    "    \n",
+    "    # Install GDAL\n",
+    "    !apt-get install -y gdal-bin python3-gdal\n",
+    "    \n",
+    "    # Add src to Python path\n",
+    "    import sys\n",
+    "    sys.path.append('.')"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "bd3ed7bb",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "import os\n",
+    "import numpy as np\n",
+    "import pandas as pd\n",
+    "import geopandas as gpd\n",
+    "import plotly.express as px\n",
+    "import plotly.graph_objects as go\n",
+    "from pathlib import Path\n",
+    "from src.ml_utils import TreeHealthPredictor, TreeGrowthForecaster, calculate_environmental_impact\n",
+    "\n",
+    "# Setup notebook display options\n",
+    "pd.set_option('display.max_columns', None)\n",
+    "pd.set_option('display.max_rows', 50)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "b1462882",
+   "metadata": {},
+   "source": [
+    "## Data Loading and Preprocessing\n",
+    "\n",
+    "Let's load our sample data and prepare it for analysis:"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "9482e1ec",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def create_sample_data():\n",
+    "    # Create sample tree data\n",
+    "    df_trees = pd.DataFrame({\n",
+    "        'state': np.random.choice(['CA', 'NY', 'TX'], 1000),\n",
+    "        'city': np.random.choice(['Los Angeles', 'New York', 'Austin'], 1000),\n",
+    "        'species': np.random.choice(['Oak', 'Maple', 'Pine'], 1000),\n",
+    "        'health': np.random.choice(['Good', 'Fair', 'Poor'], 1000),\n",
+    "        'dbh': np.random.normal(30, 10, 1000),  # Diameter at breast height\n",
+    "        'height': np.random.normal(50, 15, 1000),\n",
+    "        'lat': np.random.uniform(25, 49, 1000),\n",
+    "        'lon': np.random.uniform(-125, -70, 1000)\n",
+    "    })\n",
+    "    \n",
+    "    # Create sample canopy coverage data\n",
+    "    df_canopy = pd.DataFrame({\n",
+    "        'state': np.random.choice(['CA', 'NY', 'TX'], 100),\n",
+    "        'county': [f'County_{i}' for i in range(100)],\n",
+    "        'canopy_pct': np.random.uniform(10, 60, 100)\n",
+    "    })\n",
+    "    \n",
+    "    return df_trees, df_canopy\n",
+    "\n",
+    "# Load the data\n",
+    "df_trees, df_canopy = create_sample_data()\n",
+    "\n",
+    "print('Tree Dataset Info:')\n",
+    "print(df_trees.info())\n",
+    "print('\\nCanopy Dataset Info:')\n",
+    "print(df_canopy.info())"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "2974f782",
+   "metadata": {},
+   "source": [
+    "## Geographic Distribution Analysis\n",
+    "\n",
+    "Let's visualize the distribution of trees across the United States:"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "8c7be957",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Create a map of tree locations\n",
+    "fig = px.scatter_mapbox(df_trees,\n",
+    "                        lat='lat',\n",
+    "                        lon='lon',\n",
+    "                        color='species',\n",
+    "                        hover_data=['health', 'dbh', 'height'],\n",
+    "                        zoom=3,\n",
+    "                        title='Tree Distribution Map')\n",
+    "\n",
+    "fig.update_layout(mapbox_style='carto-positron')\n",
+    "fig.show()\n",
+    "\n",
+    "# Analyze state-level statistics\n",
+    "state_stats = df_trees.groupby('state').agg({\n",
+    "    'species': 'count',\n",
+    "    'dbh': 'mean',\n",
+    "    'height': 'mean'\n",
+    "}).round(2)\n",
+    "\n",
+    "print('\\nState-level Statistics:')\n",
+    "print(state_stats)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "543aab40",
+   "metadata": {},
+   "source": [
+    "## Advanced Statistical Analysis\n",
+    "\n",
+    "Let's perform some advanced statistical analysis to uncover patterns in tree health and growth:"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "ec247f2c",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Calculate correlations between numerical features\n",
+    "corr_matrix = df_trees[['dbh', 'height']].corr()\n",
+    "\n",
+    "# Create correlation heatmap\n",
+    "fig = px.imshow(corr_matrix,\n",
+    "                title='Feature Correlation Matrix',\n",
+    "                labels=dict(x='Features', y='Features', color='Correlation'),\n",
+    "                color_continuous_scale='RdBu')\n",
+    "fig.show()\n",
+    "\n",
+    "# Analyze health distribution by state and species\n",
+    "health_dist = pd.crosstab([df_trees['state'], df_trees['species']], df_trees['health'], normalize='index') * 100\n",
+    "print('\\nHealth Distribution by State and Species (%):')\n",
+    "print(health_dist.round(2))"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "0e7ebe90",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Create size distribution plots\n",
+    "fig = px.violin(df_trees, \n",
+    "                y='dbh',\n",
+    "                x='species',\n",
+    "                color='health',\n",
+    "                box=True,\n",
+    "                title='Tree Size Distribution by Species and Health',\n",
+    "                labels={'dbh': 'Diameter at Breast Height (cm)'})\n",
+    "fig.show()\n",
+    "\n",
+    "# Calculate size statistics by species\n",
+    "size_stats = df_trees.groupby('species').agg({\n",
+    "    'dbh': ['mean', 'std', 'min', 'max'],\n",
+    "    'height': ['mean', 'std', 'min', 'max']\n",
+    "}).round(2)\n",
+    "\n",
+    "print('\\nSize Statistics by Species:')\n",
+    "print(size_stats)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "ba79f1c7",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Calculate environmental impact by state\n",
+    "state_impacts = {}\n",
+    "for state in df_trees['state'].unique():\n",
+    "    state_trees = df_trees[df_trees['state'] == state]\n",
+    "    state_impacts[state] = calculate_environmental_impact(state_trees)\n",
+    "\n",
+    "# Create multi-metric comparison\n",
+    "impact_df = pd.DataFrame(state_impacts).T\n",
+    "fig = px.bar(impact_df,\n",
+    "             barmode='group',\n",
+    "             title='Environmental Impact by State',\n",
+    "             labels={'value': 'Impact', 'variable': 'Metric'},\n",
+    "             height=600)\n",
+    "fig.update_layout(xaxis_title='State',\n",
+    "                  yaxis_title='Value',\n",
+    "                  showlegend=True)\n",
+    "fig.show()\n",
+    "\n",
+    "# Calculate per capita impact\n",
+    "state_populations = {'CA': 39538223, 'NY': 19836286, 'TX': 29145505}  # 2020 census data\n",
+    "per_capita_impact = impact_df['co2_absorbed_lbs_per_year'].div(pd.Series(state_populations))\n",
+    "\n",
+    "print('\\nCO2 Absorption per Capita (lbs/year):')\n",
+    "print(per_capita_impact.round(2))"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "ccb7cbcf",
+   "metadata": {},
+   "source": [
+    "## Machine Learning Insights\n",
+    "\n",
+    "Let's use our ML models to generate insights about tree health and growth patterns:"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "1206e78d",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Train health predictor and analyze feature importance\n",
+    "health_predictor = TreeHealthPredictor()\n",
+    "metrics = health_predictor.train(df_trees)\n",
+    "\n",
+    "# Get feature importance scores\n",
+    "feature_importance = pd.DataFrame({\n",
+    "    'feature': health_predictor.feature_columns,\n",
+    "    'importance': health_predictor.model.feature_importances_\n",
+    "}).sort_values('importance', ascending=False)\n",
+    "\n",
+    "# Visualize feature importance\n",
+    "fig = px.bar(feature_importance,\n",
+    "             x='feature',\n",
+    "             y='importance',\n",
+    "             title='Feature Importance for Health Prediction')\n",
+    "fig.show()\n",
+    "\n",
+    "# Make predictions on a sample and analyze confidence\n",
+    "sample_trees = df_trees.sample(100)\n",
+    "predicted_proba = health_predictor.model.predict_proba(health_predictor.scaler.transform(sample_trees[health_predictor.feature_columns]))\n",
+    "confidence_scores = predicted_proba.max(axis=1)\n",
+    "\n",
+    "print('\\nPrediction Confidence Statistics:')\n",
+    "print(f'Mean Confidence: {confidence_scores.mean():.2f}')\n",
+    "print(f'Min Confidence: {confidence_scores.min():.2f}')\n",
+    "print(f'Max Confidence: {confidence_scores.max():.2f}')"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "e4e5c41a",
+   "metadata": {},
+   "source": [
+    "## Machine Learning Analysis\n",
+    "\n",
+    "Now let's use our ML utilities to predict tree health and forecast growth:"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "fa71ea42",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Initialize and train health predictor\n",
+    "health_predictor = TreeHealthPredictor()\n",
+    "metrics = health_predictor.train(df_trees)\n",
+    "\n",
+    "print('Health Prediction Model Performance:')\n",
+    "print(f'Accuracy: {metrics[\"accuracy\"]:.2f}')\n",
+    "print(f'F1 Score: {metrics[\"f1_score\"]:.2f}')\n",
+    "\n",
+    "# Predict health for new trees\n",
+    "sample_trees = df_trees.sample(5)\n",
+    "predicted_health = health_predictor.predict(sample_trees)\n",
+    "\n",
+    "print('\\nSample Health Predictions:')\n",
+    "for i, (_, tree) in enumerate(sample_trees.iterrows()):\n",
+    "    print(f'Tree {i+1} - Predicted Health: {predicted_health[i]}')"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "dbd7ecca",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Initialize and train growth forecaster\n",
+    "growth_forecaster = TreeGrowthForecaster()\n",
+    "metrics = growth_forecaster.train(df_trees)\n",
+    "\n",
+    "print('Growth Forecasting Model Performance:')\n",
+    "print(f'R² Score: {metrics[\"r2_score\"]:.2f}')\n",
+    "print(f'RMSE: {metrics[\"rmse\"]:.2f}')\n",
+    "\n",
+    "# Forecast growth for sample trees\n",
+    "growth_forecast = growth_forecaster.forecast(sample_trees)\n",
+    "\n",
+    "print('\\nGrowth Forecasts (DBH in cm):')\n",
+    "print(growth_forecast)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "e89a4a5b",
+   "metadata": {},
+   "source": [
+    "## Environmental Impact Analysis\n",
+    "\n",
+    "Finally, let's analyze the environmental impact of our tree population:"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "df2196c4",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Calculate environmental impact\n",
+    "impact_metrics = calculate_environmental_impact(df_trees)\n",
+    "\n",
+    "print('Environmental Impact Metrics (Annual):')\n",
+    "for metric, value in impact_metrics.items():\n",
+    "    print(f'{metric.replace(\"_\", \" \").title()}: {value:,.0f}')\n",
+    "\n",
+    "# Visualize impact metrics\n",
+    "fig = px.bar(x=list(impact_metrics.keys()),\n",
+    "            y=list(impact_metrics.values()),\n",
+    "            title='Annual Environmental Impact')\n",
+    "fig.update_layout(xaxis_title='Metric',\n",
+    "                  yaxis_title='Value',\n",
+    "                  xaxis_tickangle=45)\n",
+    "fig.show()"
+   ]
+  }
+ ],
+ "metadata": {
+  "language_info": {
+   "name": "python"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 5
+}
