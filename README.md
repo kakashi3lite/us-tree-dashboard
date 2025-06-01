@@ -97,6 +97,23 @@ The project uses Docker containers with all dependencies pre-configured. However
 
 ## 🚀 Running the Application
 
+### Google Colab
+For quick exploration and analysis:
+
+1. Open our Colab notebook:
+   [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/kakashi3lite/us-tree-dashboard/blob/main/notebooks/colab_analysis.ipynb)
+
+2. The notebook will automatically:
+   - Clone the repository
+   - Install dependencies
+   - Set up the GDAL environment
+   - Load sample data
+
+3. Run the cells to perform:
+   - Geographic analysis
+   - ML predictions
+   - Environmental impact assessment
+
 ### Local Development
 1. Activate the virtual environment:
    ```bash
