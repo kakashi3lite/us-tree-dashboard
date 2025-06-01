@@ -12,12 +12,113 @@ from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.metrics import accuracy_score, f1_score, mean_squared_error, r2_score
 import joblib
 from pathlib import Path
-from typing import Tuple, Dict, Any, List, Optional
+from typing import Tuple, Dict, Any, List, Optional, Union, Callable
 import logging
+import os
+from openai import OpenAI
+from unittest.mock import MagicMock
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+def analyze_patterns_with_ai(data: pd.DataFrame, analysis_prompt: str, client_factory: Optional[Callable[[], Any]] = None) -> str:
+    """
+    Analyze patterns in tree data using OpenAI's API.
+    
+    Args:
+        data: DataFrame containing tree data
+        analysis_prompt: Specific analysis request/question
+        client_factory: Optional factory function to create OpenAI client (for testing)
+        
+    Returns:
+        str: AI-generated analysis of the patterns
+        
+    Raises:
+        ValueError: If data is empty or required columns are missing
+        RuntimeError: If OpenAI API key is not configured
+    """
+    if data.empty:
+        raise ValueError("Input data is empty")
+        
+    # Validate required columns and data types
+    required_cols = {
+        'species': str,
+        'health': str,
+        'diameter': (int, float),
+        'latitude': (int, float),
+        'longitude': (int, float)
+    }
+    
+    for col, dtype in required_cols.items():
+        if col not in data.columns:
+            raise ValueError(f"Missing required column: {col}")
+            
+        # Check data types
+        if isinstance(dtype, tuple):
+            # For numeric columns
+            try:
+                pd.to_numeric(data[col])
+            except (ValueError, TypeError):
+                raise ValueError(f"Invalid data type in column {col}. Expected numeric.")
+        else:
+            # For string columns
+            if not all(isinstance(x, (str, np.str_)) for x in data[col]):
+                raise ValueError(f"Invalid data type in column {col}. Expected string.")
+    
+    # Prepare data summary for the prompt
+    data_summary = {
+        'total_trees': len(data),
+        'species_count': data['species'].value_counts().to_dict(),
+        'health_distribution': data['health'].value_counts().to_dict(),
+        'avg_diameter': pd.to_numeric(data['diameter']).mean(),
+        'location_bounds': {
+            'lat': (float(data['latitude'].min()), float(data['latitude'].max())),
+            'lon': (float(data['longitude'].min()), float(data['longitude'].max()))
+        }
+    }
+    
+    # Create prompt
+    system_prompt = """You are an expert arborist and data scientist analyzing urban tree data.
+    Provide insights based on the data summary and specific analysis request.
+    Focus on practical implications for urban forestry management."""
+    
+    user_prompt = f"""
+    Data Summary:
+    {data_summary}
+    
+    Analysis Request:
+    {analysis_prompt}
+    
+    Please provide a detailed analysis with specific insights and recommendations.
+    """
+    
+    # Initialize OpenAI client
+    if client_factory is None:
+        api_key = os.getenv('OPENAI_API_KEY')
+        if not api_key:
+            raise RuntimeError("OpenAI API key not found in environment variables")
+        client = OpenAI()
+    else:
+        client = client_factory()
+    
+    try:
+        # Call OpenAI API
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.7,
+            max_tokens=1000
+        )
+        
+        return response.choices[0].message.content
+        
+    except Exception as e:
+        logger.error(f"Error calling OpenAI API: {str(e)}")
+        raise RuntimeError(f"Failed to analyze patterns: {str(e)}")
 
 class TreeHealthPredictor:
     """Predicts tree health based on various environmental and physical features."""
