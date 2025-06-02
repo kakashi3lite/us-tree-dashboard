@@ -1,0 +1,25 @@
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+[build]
+  command = "python build.py"
+  publish = "dist"
+  base = "/"
+
+[build.environment]
+  PYTHON_VERSION = "3.9"
+  GDAL_LIBRARY_PATH = "/opt/vendor/lib/libgdal.so"
+  PROJ_LIB = "/opt/vendor/share/proj"
+
+[[plugins]]
+  package = "@netlify/plugin-python"
+
+[functions]
+  directory = "api"
+  node_bundler = "esbuild"
+
+[dev]
+  command = "python app.py"
+  targetPort = 8050

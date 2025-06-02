@@ -1,0 +1,20 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "app.py",
+      "use": "@vercel/python"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "app.py"
+    }
+  ],
+  "env": {
+    "PYTHON_VERSION": "3.9",
+    "GDAL_LIBRARY_PATH": "/opt/vendor/lib/libgdal.so",
+    "PROJ_LIB": "/opt/vendor/share/proj"
+  }
+}
