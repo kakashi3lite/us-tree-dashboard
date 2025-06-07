@@ -17,6 +17,9 @@
 - Install dependencies:
   ```bash
   pip install -r requirements.txt
+  ```
+- Install dev tools:
+  ```bash
   pip install pytest pytest-cov openai
   ```
 - Run tests:

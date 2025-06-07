@@ -146,22 +146,28 @@ For quick exploration and analysis:
    .\venv\Scripts\activate  # Windows
    source venv/bin/activate # Linux/Mac
    ```
+2. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-2. Download required datasets:
+
+3. Download required datasets:
    ```bash
    python src/prepare_data.py
    ```
 
-3. Run the application:
+4. Run the application:
    ```bash
    python app.py
    ```
 
-4. Open your browser and navigate to: `http://127.0.0.1:8050`
+5. Open your browser and navigate to: `http://127.0.0.1:8050`
 
 ### Testing
 Install development dependencies and run the unit tests to verify your setup:
 ```bash
+pip install -r requirements.txt
 pip install pytest pytest-cov openai
 pytest
 ```
