@@ -98,7 +98,7 @@ An interactive dashboard for analyzing US tree data with machine learning insigh
 
 4. Start the main dashboard:
    ```bash
-   docker-compose up --build -d
+   docker-compose up
    ```
 
 5. (Optional) Start the Jupyter environment for analysis:
@@ -109,7 +109,7 @@ An interactive dashboard for analyzing US tree data with machine learning insigh
 ### Environment Setup
 
 The project uses Docker containers with all dependencies pre-configured. However, if you need to modify environment variables:
-1. Edit `.env` to configure:
+- Edit `.env` to configure:
    - Mapbox API token
    - Database credentials
    - Other service configurations
