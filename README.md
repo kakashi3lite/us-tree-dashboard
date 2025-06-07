@@ -109,14 +109,7 @@ An interactive dashboard for analyzing US tree data with machine learning insigh
 ### Environment Setup
 
 The project uses Docker containers with all dependencies pre-configured. However, if you need to modify environment variables:
-
-1. Copy the example environment file:
-   ```bash
-   copy .env.example .env  # Windows
-   cp .env.example .env    # Linux/Mac
-   ```
-
-2. Edit `.env` to configure:
+1. Edit `.env` to configure:
    - Mapbox API token
    - Database credentials
    - Other service configurations
@@ -141,28 +134,16 @@ For quick exploration and analysis:
    - Environmental impact assessment
 
 ### Local Development
-1. Activate the virtual environment:
-   ```bash
-   .\venv\Scripts\activate  # Windows
-   source venv/bin/activate # Linux/Mac
-   ```
-
-2. Download required datasets:
-   ```bash
-   python src/prepare_data.py
-   ```
-
-3. Run the application:
-   ```bash
-   python app.py
-   ```
-
-4. Open your browser and navigate to: `http://127.0.0.1:8050`
+Start the dashboard using Docker Compose:
+```bash
+docker-compose up
+```
+Open your browser and navigate to: `http://127.0.0.1:8050`
 
 ### Testing
-Install development dependencies and run the unit tests to verify your setup:
+Install dependencies and run the unit tests:
 ```bash
-pip install pytest pytest-cov openai
+pip install -r requirements.txt
 pytest
 ```
 
