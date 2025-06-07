@@ -48,3 +48,10 @@
 4. Start the app with `python app.py` or via Docker.
 5. Commit code with concise messages describing the change.
 
+## Codex Environment
+- Use the `setup_env.sh` script to prepare the environment. It verifies
+  Python 3.9, creates a virtual environment, installs dependencies, and
+  runs the tests.
+- Configure Codex projects to execute this script during setup to ensure
+  a consistent environment.
+
