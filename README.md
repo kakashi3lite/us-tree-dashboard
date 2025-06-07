@@ -159,6 +159,13 @@ For quick exploration and analysis:
 
 4. Open your browser and navigate to: `http://127.0.0.1:8050`
 
+### Testing
+Install development dependencies and run the unit tests to verify your setup:
+```bash
+pip install pytest pytest-cov openai
+pytest
+```
+
 ### Production Deployment
 1. Set environment variables for production
 2. Use Gunicorn to run the application:
