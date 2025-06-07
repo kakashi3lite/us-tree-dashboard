@@ -13,6 +13,12 @@
 - Prefer type hints and dataclasses for new code.
 - Keep functions small with clear docstrings.
 
+## Environment Setup
+1. Create a Python 3.9 venv or use Docker.
+2. `pip install -r requirements.txt`.
+3. Run `pytest` or `docker-compose up`.
+4. Start the app with `python app.py` or `docker-compose up`.
+
 ## Build & Test Commands
 - Install dependencies:
   ```bash
