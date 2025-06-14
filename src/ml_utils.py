@@ -1,15 +1,17 @@
-"""
-Machine Learning utilities for tree data analysis and prediction.
+"""Machine Learning utilities for tree data analysis and prediction.
 This module provides reusable ML components for tree health prediction,
-growth forecasting, and species classification.
-"""
+growth forecasting, species classification, and geospatial analysis."""
 
 import numpy as np
 import pandas as pd
+import geopandas as gpd
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.metrics import accuracy_score, f1_score, mean_squared_error, r2_score
+from sklearn.neighbors import KNeighborsRegressor
+from sklearn.cluster import DBSCAN
+from shapely.geometry import Point, Polygon
 import joblib
 import json
 import os
@@ -20,6 +22,9 @@ import logging
 from datetime import datetime
 from uuid import uuid4
 from openai import OpenAI
+import redis
+from sqlalchemy import create_engine
+from sqlalchemy.sql import text
 
 # Import metrics components
 from .metrics import (
@@ -38,745 +43,209 @@ from .metrics import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Initialize Redis connection
+redis_client = redis.Redis(
+    host=os.getenv('REDIS_HOST', 'localhost'),
+    port=int(os.getenv('REDIS_PORT', 6379)),
+    db=0,
+    decode_responses=True
+)
+
+# Initialize PostGIS connection
+postgis_engine = create_engine(os.getenv('POSTGIS_URL', 'postgresql://user:pass@localhost:5432/trees'))
+
 class TreeAnalyzer:
-    """
-    A class to analyze tree data using various machine learning techniques.
-    
-    This class provides methods for pattern analysis, health prediction,
-    and growth forecasting using both traditional ML and AI approaches.
-    """
+    """A class to analyze tree data using various machine learning techniques."""
 
     def __init__(self, model_path: Optional[str] = None):
-        """
-        Initialize TreeAnalyzer.
-        
-        Args:
-            model_path: Optional path to load pre-trained models from
-        """
         self.model_path = model_path
         self.health_model = None
         self.growth_model = None
+        self.species_distribution_model = None
         self._load_models()
 
     def _load_models(self):
-        """Load pre-trained models if available."""
         if self.model_path:
             models_dir = Path(self.model_path)
-            health_model_path = models_dir / "health_predictor.joblib"
-            growth_model_path = models_dir / "growth_forecaster.joblib"
-            
-            if health_model_path.exists():
-                self.health_model = joblib.load(health_model_path)
-            if growth_model_path.exists():
-                self.growth_model = joblib.load(growth_model_path)
+            for model_file in ['health_predictor.joblib', 'growth_forecaster.joblib', 'species_distribution.joblib']:
+                model_path = models_dir / model_file
+                if model_path.exists():
+                    setattr(self, model_file.split('.')[0], joblib.load(model_path))
 
-        def analyze_patterns_with_ai(self, data: pd.DataFrame, analysis_prompt: str, 
-                               client_factory: Optional[Callable[[], Any]] = None) -> str:
-        """
-        Analyze patterns in tree data using OpenAI's API.
-        
-        Args:
-            data: DataFrame containing tree data
-            analysis_prompt: Specific analysis request/question
-            client_factory: Optional factory function to create OpenAI client (for testing)
-            
-        Returns:
-            str: AI-generated analysis of the patterns
-            
-        Raises:
-            ValueError: If data is empty or required columns are missing
-            RuntimeError: If OpenAI API key is not configured
-        """
-        if data.empty:
-            raise ValueError("Input data is empty")
-            
-        # Initialize data summary
-        data_summary = {}
-        
-        # Validate required columns and data types
-        required_cols = {
-            'species': str,
-            'health': str,
-            'diameter': (int, float),
-            'lat': (int, float),
-            'lon': (int, float)
+    def predict_species_distribution(self, climate_data: pd.DataFrame, soil_data: pd.DataFrame) -> Dict[str, Any]:
+        """Predict tree species distribution based on climate and soil data."""
+        cache_key = f"species_dist_{hash(str(climate_data) + str(soil_data))}"
+        cached_result = redis_client.get(cache_key)
+
+        if cached_result:
+            return json.loads(cached_result)
+
+        features = self._prepare_environmental_features(climate_data, soil_data)
+        predictions = self.species_distribution_model.predict_proba(features)
+        species_probabilities = dict(zip(self.species_distribution_model.classes_, predictions[0]))
+
+        result = {
+            'predictions': species_probabilities,
+            'confidence_intervals': calculate_confidence_intervals(predictions),
+            'timestamp': datetime.now().isoformat()
         }
 
-        for col, dtype in required_cols.items():
-            if col not in data.columns:
-                raise ValueError(f"Missing required column: {col}")
-            
-            # Check data types
-            if isinstance(dtype, tuple):
-                # For numeric columns
-                try:
-                    pd.to_numeric(data[col])
-                except (ValueError, TypeError):
-                    raise ValueError(f"Invalid data type in column {col}. Expected numeric.")
-            else:
-                # For string columns
-                if not all(isinstance(x, (str, np.str_)) for x in data[col]):
-                    raise ValueError(f"Invalid data type in column {col}. Expected string.")
+        redis_client.setex(cache_key, 3600, json.dumps(result))  # Cache for 1 hour
+        return result
+
+    def analyze_spatial_patterns(self, gdf: gpd.GeoDataFrame) -> Dict[str, Any]:
+        """Analyze spatial patterns in tree distribution using DBSCAN clustering."""
+        if not isinstance(gdf, gpd.GeoDataFrame):
+            raise ValueError("Input must be a GeoDataFrame")
+
+        # Extract coordinates for clustering
+        coords = np.array([[p.x, p.y] for p in gdf.geometry])
         
-        # Prepare data summary for the prompt
-        data_summary = {
-            'total_trees': len(data),
-            'species_count': data['species'].value_counts().to_dict(),
-            'health_distribution': data['health'].value_counts().to_dict(),
-            'avg_diameter': float(pd.to_numeric(data['diameter']).mean()),
-            'location_bounds': {
-                'lat': (float(data['lat'].min()), float(data['lat'].max())),
-                'lon': (float(data['lon'].min()), float(data['lon'].max()))
-            }
+        # Perform DBSCAN clustering
+        clustering = DBSCAN(eps=0.01, min_samples=5).fit(coords)
+        
+        # Analyze clusters
+        clusters = pd.Series(clustering.labels_).value_counts().to_dict()
+        cluster_stats = {
+            'total_clusters': len([c for c in clusters if c != -1]),
+            'noise_points': clusters.get(-1, 0),
+            'largest_cluster_size': max(clusters.values()) if clusters else 0
         }
-        
-        # Create prompt
-        system_prompt = """You are an expert arborist and data scientist analyzing urban tree data.
-        Provide insights based on the data summary and specific analysis request.
-        Focus on practical implications for urban forestry management."""
-        
-        user_prompt = f"""
-        Data Summary:
-        {data_summary}
-        
-        Analysis Request:
-        {analysis_prompt}
-        
-        Please provide a detailed analysis with specific insights and recommendations.
-        """
-        
-        # Initialize OpenAI client
-        if client_factory is None:
-            api_key = os.getenv('OPENAI_API_KEY')
-            if not api_key:
-                raise RuntimeError("OpenAI API key not found in environment variables")
-            client = OpenAI()
-        else:
-            client = client_factory()
-        
-        try:
-            # Call OpenAI API
-            response = client.chat.completions.create(
-                model="gpt-4",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                temperature=0.7,
-                max_tokens=1000
-            )
-            
-            return response.choices[0].message.content
-            
-        except Exception as e:
-            logger.error(f"Error calling OpenAI API: {str(e)}")
-            raise RuntimeError(f"Failed to analyze patterns: {str(e)}")
+
+        # Calculate spatial density
+        density_grid = self._calculate_spatial_density(gdf)
+
+        return {
+            'cluster_analysis': cluster_stats,
+            'density_grid': density_grid,
+            'timestamp': datetime.now().isoformat()
+        }
+
+    def _calculate_spatial_density(self, gdf: gpd.GeoDataFrame) -> Dict[str, float]:
+        """Calculate tree density in a grid pattern."""
+        bounds = gdf.total_bounds
+        cell_size = 0.01  # Approximately 1km at equator
+
+        grid_cells = {}
+        for x in np.arange(bounds[0], bounds[2], cell_size):
+            for y in np.arange(bounds[1], bounds[3], cell_size):
+                cell = Polygon([
+                    (x, y), (x+cell_size, y),
+                    (x+cell_size, y+cell_size), (x, y+cell_size)
+                ])
+                trees_in_cell = gdf[gdf.geometry.intersects(cell)]
+                grid_cells[f"{x:.3f},{y:.3f}"] = len(trees_in_cell)
+
+        return grid_cells
+
+    def _prepare_environmental_features(self, climate_data: pd.DataFrame, soil_data: pd.DataFrame) -> np.ndarray:
+        """Prepare environmental features for species distribution modeling."""
+        # Merge climate and soil data
+        features = pd.merge(
+            climate_data,
+            soil_data,
+            on=['lat', 'lon'],
+            how='inner'
+        )
+
+        # Select relevant features
+        selected_features = [
+            'temperature_mean', 'precipitation_annual',
+            'soil_ph', 'soil_organic_matter', 'elevation'
+        ]
+
+        return features[selected_features].values
 
 class TreeHealthPredictor:
-    """Predicts tree health based on various environmental and physical features."""
-    
+    """Predicts tree health based on environmental and physical features."""
+
     def __init__(self, model_path: Optional[str] = None):
         self.model = None
         self.scaler = StandardScaler()
         self.label_encoder = LabelEncoder()
-        self.feature_columns = ['diameter', 'height', 'lat', 'lon']
+        self.feature_columns = ['diameter', 'height', 'lat', 'lon', 'soil_quality', 'canopy_density']
         self.model_path = model_path or Path(__file__).parent.parent / "models"
         self.model_path.mkdir(exist_ok=True)
-        self.known_health_states = []  # Track known health states during training
-        self.model_version = str(uuid4())[:8]  # Generate unique version ID
-        
-        # Initialize metrics collection
+        self.model_version = str(uuid4())[:8]
+
         self.metrics_config = MetricConfig(
-            collection_interval=60,  # Collect metrics every 60 seconds
+            collection_interval=60,
             enable_confidence_intervals=True,
             store_predictions=True
         )
+
+    def train(self, data: pd.DataFrame) -> Dict[str, Any]:
+        """Train the health prediction model with enhanced features."""
+        X = self._prepare_features(data)
+        y = self.label_encoder.fit_transform(data['health'])
+
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+        self.model = RandomForestClassifier(n_estimators=100, random_state=42)
         
-    def prepare_features(self, data: pd.DataFrame) -> Tuple[np.ndarray, Optional[np.ndarray]]:
-        """Prepare features and target for training or prediction."""
+        # Track training metrics
+        start_time = time.time()
+        self.model.fit(X_train, y_train)
+        training_time = time.time() - start_time
+
+        # Evaluate model
+        y_pred = self.model.predict(X_test)
+        metrics = {
+            'accuracy': accuracy_score(y_test, y_pred),
+            'f1_score': f1_score(y_test, y_pred, average='weighted'),
+            'training_time': training_time,
+            'model_version': self.model_version
+        }
+
+        # Save model and metrics
+        self._save_model(metrics)
+        return metrics
+
+    def _prepare_features(self, data: pd.DataFrame) -> np.ndarray:
+        """Prepare features with enhanced environmental data."""
         if not all(col in data.columns for col in self.feature_columns):
             missing = [col for col in self.feature_columns if col not in data.columns]
             raise ValueError(f"Missing required feature columns: {missing}")
-        
-        X = data[self.feature_columns].copy()
-        y = None
-        
-        if 'health' in data.columns:
-            unique_health_states = data['health'].unique()
-            if self.known_health_states:
-                # Add any new health states found in the data
-                new_states = set(unique_health_states) - set(self.known_health_states)
-                if new_states:
-                    self.known_health_states = list(set(self.known_health_states) | new_states)
-                    self.label_encoder.fit(self.known_health_states)
-            else:
-                # First time training, initialize known states
-                self.known_health_states = list(unique_health_states)
-                self.label_encoder.fit(self.known_health_states)
-            y = self.label_encoder.transform(data['health'])
-        
-        # Use transform instead of fit_transform for prediction to maintain training scale
-        if self.model is None:
-            X_scaled = self.scaler.fit_transform(X)
-        else:
-            X_scaled = self.scaler.transform(X)
-        
-        return X_scaled, y
-        
-    def train(self, data: pd.DataFrame, test_size: float = 0.2) -> Dict[str, float]:
-        """Train the health prediction model and return performance metrics."""
-        train_start_time = time.time()
-        
-        if len(data) == 0:
-            raise ValueError("Cannot train on empty dataset")
-            
-        X, y = self.prepare_features(data)
-        if y is None:
-            raise ValueError("No health data available for training")
-        
-        # Handle small datasets
-        if len(data) < 5:
-            X_train, y_train = X, y
-            X_test, y_test = X, y
-        else:
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size)
-        
-        self.model = RandomForestClassifier(n_estimators=100, random_state=42)
-        self.model.fit(X_train, y_train)
-        
-        y_pred = self.model.predict(X_test)
-        y_proba = self.model.predict_proba(X_test)
-        
-        metrics = {
-            'accuracy': float(accuracy_score(y_test, y_pred)),
-            'f1_score': float(f1_score(y_test, y_pred, average='weighted')),
-            'training_samples': len(X_train),
-            'test_samples': len(X_test)
-        }
-        
-        # Calculate feature importance
-        feature_importance = dict(zip(self.feature_columns, self.model.feature_importances_.tolist()))
-        metrics['feature_importance'] = feature_importance
-        
-        # Calculate confidence intervals
-        confidence_intervals = calculate_confidence_intervals(y_proba)
-        metrics['confidence_intervals'] = confidence_intervals
-        
-        # Save model and components
-        save_data = {
-            'model': self.model,
-            'scaler': self.scaler,
-            'label_encoder': self.label_encoder,
-            'known_health_states': self.known_health_states,
-            'feature_columns': self.feature_columns,
-            'model_version': self.model_version
-        }
-        joblib.dump(save_data, self.model_path / 'health_predictor.joblib')
-        
-        # Store training metrics
-        training_time = time.time() - train_start_time
-        model_metrics = ModelTrainingMetrics(
-            model_name='TreeHealthPredictor',
-            version=self.model_version,
-            timestamp=datetime.now().isoformat(),
-            metrics=metrics,
-            parameters={
-                'n_estimators': 100,
-                'random_state': 42,
-                'feature_columns': self.feature_columns,
-                'test_size': test_size
-            },
-            dataset_size=len(data),
-            training_time=training_time
-        )
-        metrics_store.save_model_metrics(model_metrics)
-        
-        return metrics
-        
-    def predict(self, data: pd.DataFrame) -> np.ndarray:
-        """Predict health status for new trees."""
-        predict_start_time = time.time()
-        
-        if self.model is None:
-            model_file = self.model_path / 'health_predictor.joblib'
-            if model_file.exists():
-                saved_data = joblib.load(model_file)
-                self.model = saved_data['model']
-                self.scaler = saved_data['scaler']
-                self.label_encoder = saved_data['label_encoder']
-                self.known_health_states = saved_data['known_health_states']
-                self.feature_columns = saved_data.get('feature_columns', self.feature_columns)
-                self.model_version = saved_data.get('model_version', str(uuid4())[:8])
-            else:
-                raise ValueError("Model not trained. Call train() first.")
-        
-        X, _ = self.prepare_features(data)
-        predictions = self.model.predict(X)
-        prediction_proba = self.model.predict_proba(X)
-        
-        # Collect prediction metrics
-        predict_time = time.time() - predict_start_time
-        prediction_metrics = {
-            'latency': predict_time,
-            'batch_size': len(data),
-            'mean_confidence': float(np.max(prediction_proba, axis=1).mean()),
-            'min_confidence': float(np.max(prediction_proba, axis=1).min()),
-            'max_confidence': float(np.max(prediction_proba, axis=1).max())
-        }
-        
-        # Store prediction metrics as a time series
-        metric_series = MetricSeries(
-            name='health_prediction_metrics',
-            timestamp=datetime.now().isoformat(),
-            values=prediction_metrics
-        )
-        metrics_store.save_metric_series(metric_series)
-        
-        logger.info(f"Health prediction completed in {predict_time:.2f}s for {len(data)} trees")
-        return self.label_encoder.inverse_transform(predictions)
 
-class TreeGrowthForecaster:
-    """Forecasts tree growth based on historical data and environmental factors."""
-    
-    def __init__(self, model_path: Optional[str] = None):
-        self.model = None
-        self.scaler = StandardScaler()
-        self.feature_cols = None  # Track which columns were used for training
-        self.model_path = model_path or Path(__file__).parent.parent / "models"
-        self.model_path.mkdir(exist_ok=True)
-        self.model_version = str(uuid4())[:8]  # Generate unique version ID
-        
-        # Initialize metrics collection
-        self.metrics_config = MetricConfig(
-            collection_interval=60,  # Collect metrics every 60 seconds
-            enable_confidence_intervals=True,
-            store_predictions=True
-        )
-        
-    def train(self, data: pd.DataFrame, target_column: Optional[str] = None) -> Dict[str, float]:
-        """Train the growth forecasting model."""
-        train_start_time = time.time()
-        
-        if data.empty:
-            raise ValueError("Cannot train on empty dataset")
+        # Query PostGIS for additional environmental data
+        with postgis_engine.connect() as conn:
+            points = [Point(row.lon, row.lat) for _, row in data.iterrows()]
+            point_wkts = [f"ST_SetSRID(ST_Point({p.x}, {p.y}), 4326)" for p in points]
             
-        # Support both dbh and diameter column names
-        if target_column is None:
-            target_column = 'dbh' if 'dbh' in data.columns else 'diameter'
+            query = text("""
+                SELECT ST_Distance(point, weather_stations.geom) as distance,
+                       temperature, humidity
+                FROM unnest(:points) as point
+                CROSS JOIN LATERAL (
+                    SELECT geom, temperature, humidity
+                    FROM weather_stations
+                    ORDER BY point <-> geom
+                    LIMIT 1
+                ) as weather_stations
+            """)
             
-        if target_column not in data.columns:
-            raise ValueError(f"Target column {target_column} not found in data. Expected 'dbh' or 'diameter'.")
-        
-        # Validate non-negative values
-        if (data[target_column] < 0).any():
-            raise ValueError(f"Found negative values in {target_column}. All measurements must be non-negative.")
-        
-        self.feature_cols = ['lat', 'lon', 'age'] if 'age' in data.columns else ['lat', 'lon']
-        X = self.scaler.fit_transform(data[self.feature_cols])
-        y = data[target_column].values
-        
-        # Ensure we have enough data to split
-        if len(data) < 5:
-            X_train, y_train = X, y
-            X_test, y_test = X, y
-        else:
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
-        
-        self.model = RandomForestRegressor(n_estimators=100, random_state=42)
-        self.model.fit(X_train, y_train)
-        
-        y_pred = self.model.predict(X_test)
-        metrics = {
-            'r2_score': max(-1.0, r2_score(y_test, y_pred)),  # Clip R² to -1 minimum
-            'rmse': np.sqrt(mean_squared_error(y_test, y_pred)),
-            'training_samples': len(X_train),
-            'test_samples': len(X_test),
-            'feature_importance': dict(zip(self.feature_cols, self.model.feature_importances_.tolist()))
-        }
-        
-        # Calculate confidence intervals using bootstrapping
-        confidence_intervals = calculate_confidence_intervals(
-            [tree.predict(X_test) for tree in self.model.estimators_]
-        )
-        metrics['confidence_intervals'] = confidence_intervals
-        
-        # Save model components
-        joblib.dump({
-            'model': self.model,
-            'scaler': self.scaler,
-            'feature_cols': self.feature_cols,
-            'model_version': self.model_version
-        }, self.model_path / 'growth_forecaster.joblib')
-        
-        # Store training metrics
-        training_time = time.time() - train_start_time
-        model_metrics = ModelTrainingMetrics(
-            model_name='TreeGrowthForecaster',
-            version=self.model_version,
-            timestamp=datetime.now().isoformat(),
-            metrics=metrics,
-            parameters={
-                'n_estimators': 100,
-                'random_state': 42,
-                'feature_columns': self.feature_cols,
-                'target_column': target_column
-            },
-            dataset_size=len(data),
-            training_time=training_time
-        )
-        metrics_store.save_model_metrics(model_metrics)
-        
-        return metrics
-        
-    def forecast(self, data: pd.DataFrame, years_ahead: int = 5) -> pd.DataFrame:
-        """Forecast tree growth for specified number of years."""
-        forecast_start_time = time.time()
-        
-        if years_ahead <= 0:
-            raise ValueError("years_ahead must be a positive integer")
-            
-        if self.model is None:
-            model_file = self.model_path / 'growth_forecaster.joblib'
-            if model_file.exists():
-                saved_data = joblib.load(model_file)
-                self.model = saved_data['model']
-                self.scaler = saved_data['scaler']
-                self.feature_cols = saved_data['feature_cols']
-                self.model_version = saved_data.get('model_version', str(uuid4())[:8])
-            else:
-                raise ValueError("Model not trained. Call train() first.")
-        
-        if self.feature_cols is None:
-            raise ValueError("Model not properly initialized. Feature columns unknown.")
-        
-        feature_cols = self.feature_cols
-        if not all(col in data.columns for col in feature_cols):
-            missing = [col for col in feature_cols if col not in data.columns]
-            raise ValueError(f"Missing required feature columns: {missing}")
-        
-        X = self.scaler.transform(data[feature_cols])
-        
-        forecasts = []
-        forecast_uncertainties = []
-        
-        for year in range(years_ahead):
-            if 'age' in feature_cols:
-                X[:, feature_cols.index('age')] += 1
-            
-            # Get predictions from all trees in the forest
-            tree_predictions = np.array([tree.predict(X) for tree in self.model.estimators_])
-            
-            # Calculate mean prediction and uncertainty
-            forecast = np.mean(tree_predictions, axis=0)
-            uncertainty = np.std(tree_predictions, axis=0)
-            
-            forecasts.append(forecast)
-            forecast_uncertainties.append(uncertainty)
-        
-        # Create forecast DataFrame
-        forecast_df = pd.DataFrame(
-            np.array(forecasts).T,
-            columns=[f'year_{i+1}' for i in range(years_ahead)],
-            index=data.index
-        )
-        
-        # Add uncertainty estimates
-        uncertainty_df = pd.DataFrame(
-            np.array(forecast_uncertainties).T,
-            columns=[f'year_{i+1}_uncertainty' for i in range(years_ahead)],
-            index=data.index
-        )
-        
-        # Collect prediction metrics
-        forecast_time = time.time() - forecast_start_time
-        prediction_metrics = {
-            'latency': forecast_time,
-            'batch_size': len(data),
-            'years_ahead': years_ahead,
-            'mean_uncertainty': float(np.mean(forecast_uncertainties)),
-            'max_uncertainty': float(np.max(forecast_uncertainties))
-        }
-        
-        # Store prediction metrics
-        metric_series = MetricSeries(
-            name='growth_forecast_metrics',
-            timestamp=datetime.now().isoformat(),
-            values=prediction_metrics
-        )
-        metrics_store.save_metric_series(metric_series)
-        
-        logger.info(f"Growth forecast completed in {forecast_time:.2f}s for {len(data)} trees")
-        return pd.concat([forecast_df, uncertainty_df], axis=1)
-        
-def calculate_environmental_impact(trees_data: pd.DataFrame) -> Dict[str, float]:
-    """Calculate environmental impact metrics for a group of trees."""
-    # Constants for environmental calculations (base rates for a mature tree with diameter = 30")
-    BASE_CO2_ABSORPTION_RATE = 48  # pounds per year
-    BASE_O2_PRODUCTION_RATE = 260  # pounds per year
-    BASE_RAINFALL_INTERCEPTED = 760  # gallons per year
-    BASE_DIAMETER = 30  # inches
-    
-    # Health state multipliers
-    health_multipliers = {
-        'Good': 1.0,
-        'Fair': 0.7,
-        'Poor': 0.4
-    }
-    
-    # Calculate size-adjusted metrics for each tree
-    total_co2 = 0
-    total_o2 = 0
-    total_rainfall = 0
-    
-    for _, tree in trees_data.iterrows():
-        # Size adjustment factor (relative to 30" diameter baseline)
-        size_factor = (tree['diameter'] / BASE_DIAMETER) ** 2  # Square relationship with diameter
-        
-        # Health adjustment
-        health_factor = health_multipliers.get(tree['health'], 0.7)  # Default to 'Fair' if unknown
-        
-        # Calculate individual tree impact
-        total_co2 += BASE_CO2_ABSORPTION_RATE * size_factor * health_factor
-        total_o2 += BASE_O2_PRODUCTION_RATE * size_factor * health_factor
-        total_rainfall += BASE_RAINFALL_INTERCEPTED * size_factor * health_factor
-    
-    metrics = {
-        'co2_absorbed_lbs_per_year': total_co2,
-        'o2_produced_lbs_per_year': total_o2,
-        'rainfall_intercepted_gallons': total_rainfall,
-        'equivalent_car_emissions_offset': total_co2 / 11000  # Average car emits 11,000 lbs CO2/year
-    }
-    
-    return metrics
+            result = conn.execute(query, {"points": point_wkts})
+            env_data = pd.DataFrame(result.fetchall(), columns=['distance', 'temperature', 'humidity'])
 
-def identify_optimal_planting_locations(
-    region_data: pd.DataFrame,
-    existing_trees: pd.DataFrame,
-    constraints: Dict[str, Any]
-) -> pd.DataFrame:
-    """Identify optimal locations for new tree planting."""
-    # Implementation would consider factors like:
-    # - Distance from existing trees
-    # - Soil quality
-    # - Urban heat island effect
-    # - Population density
-    # - Available space
-    # This is a placeholder for the actual implementation
-    pass
+        # Combine original features with environmental data
+        features = np.column_stack([
+            data[self.feature_columns].values,
+            env_data[['temperature', 'humidity']].values
+        ])
 
-class TreeValueEstimator:
-    """Estimates market value of trees based on multiple factors."""
-    
-    def __init__(self, model_path: Optional[str] = None):
-        self.model = None
-        self.scaler = StandardScaler()
-        self.feature_columns = ['diameter', 'height', 'lat', 'lon', 'age', 'health_score']
-        self.model_path = model_path or Path(__file__).parent.parent / "models"
-        self.model_path.mkdir(exist_ok=True)
-        self.model_version = str(uuid4())[:8]  # Generate unique version ID
-        
-        # Initialize metrics collection
-        self.metrics_config = MetricConfig(
-            collection_interval=60,  # Collect metrics every 60 seconds
-            enable_confidence_intervals=True,
-            store_predictions=True
-        )
-        
-    def prepare_features(self, data: pd.DataFrame) -> np.ndarray:
-        """Prepare features for value estimation."""
-        # Convert categorical health to numerical score
-        health_scores = {'Poor': 0.3, 'Fair': 0.6, 'Good': 1.0}
-        data['health_score'] = data['health'].map(health_scores)
-        
-        # Calculate tree age if not provided
-        if 'age' not in data.columns:
-            # Approximate age using diameter (DBH)
-            data['age'] = data['diameter'] * 0.5  # Simple approximation
-        
-        X = data[self.feature_columns].copy()
-        return self.scaler.transform(X)
-        
-    def train(self, data: pd.DataFrame) -> Dict[str, float]:
-        """Train the value estimation model."""
-        train_start_time = time.time()
-        
-        if data.empty:
-            raise ValueError("Cannot train on empty dataset")
-        
-        X = self.prepare_features(data)
-        
-        # Calculate baseline values based on size and health
-        base_values = self._calculate_base_values(data)
-        
-        # Split data for training
-        if len(data) < 5:
-            X_train, y_train = X, base_values
-            X_test, y_test = X, base_values
-        else:
-            X_train, X_test, y_train, y_test = train_test_split(X, base_values, test_size=0.2)
-        
-        # Train model to learn location-based value adjustments
-        self.model = RandomForestRegressor(n_estimators=100, random_state=42)
-        self.model.fit(X_train, y_train)
-        
-        # Calculate metrics
-        y_pred = self.model.predict(X_test)
-        metrics = {
-            'r2_score': r2_score(y_test, y_pred),
-            'rmse': np.sqrt(mean_squared_error(y_test, y_pred)),
-            'training_samples': len(X_train),
-            'test_samples': len(X_test),
-            'feature_importance': dict(zip(self.feature_columns, self.model.feature_importances_.tolist()))
-        }
-        
-        # Calculate confidence intervals using bootstrapping
-        confidence_intervals = calculate_confidence_intervals(
-            [tree.predict(X_test) for tree in self.model.estimators_]
-        )
-        metrics['confidence_intervals'] = confidence_intervals
-        
-        # Save model components
-        joblib.dump({
-            'model': self.model,
-            'scaler': self.scaler,
-            'model_version': self.model_version
-        }, self.model_path / 'value_estimator.joblib')
-        
-        # Store training metrics
-        training_time = time.time() - train_start_time
-        model_metrics = ModelTrainingMetrics(
-            model_name='TreeValueEstimator',
-            version=self.model_version,
-            timestamp=datetime.now().isoformat(),
-            metrics=metrics,
-            parameters={
-                'n_estimators': 100,
-                'random_state': 42,
-                'feature_columns': self.feature_columns
-            },
-            dataset_size=len(data),
-            training_time=training_time
-        )
-        metrics_store.save_model_metrics(model_metrics)
-        
-        return metrics
-        
-    def estimate_value(self, data: pd.DataFrame) -> pd.DataFrame:
-        """Estimate tree values considering multiple factors."""
-        estimate_start_time = time.time()
-        
-        if self.model is None:
-            model_file = self.model_path / 'value_estimator.joblib'
-            if model_file.exists():
-                saved_data = joblib.load(model_file)
-                self.model = saved_data['model']
-                self.scaler = saved_data['scaler']
-                self.model_version = saved_data.get('model_version', str(uuid4())[:8])
-            else:
-                raise ValueError("Model not trained. Call train() first.")
-        
-        X = self.prepare_features(data)
-        
-        # Get predictions from all trees for uncertainty estimation
-        tree_predictions = np.array([tree.predict(X) for tree in self.model.estimators_])
-        location_multipliers = np.mean(tree_predictions, axis=0)
-        uncertainties = np.std(tree_predictions, axis=0)
-        
-        # Calculate all value components
-        base_values = self._calculate_base_values(data)
-        eco_values = self._calculate_ecosystem_value(data)
-        property_values = self._calculate_property_impact(data)
-        
-        results = pd.DataFrame({
-            'base_value': base_values,
-            'location_adjusted_value': base_values * location_multipliers,
-            'location_uncertainty': base_values * uncertainties,
-            'ecosystem_value': eco_values,
-            'property_value_impact': property_values
-        })
-        
-        results['total_value'] = (
-            results['location_adjusted_value'] + 
-            results['ecosystem_value'] + 
-            results['property_value_impact']
-        )
-        
-        # Collect estimation metrics
-        estimate_time = time.time() - estimate_start_time
-        estimation_metrics = {
-            'latency': estimate_time,
-            'batch_size': len(data),
-            'mean_uncertainty': float(uncertainties.mean()),
-            'max_uncertainty': float(uncertainties.max()),
-            'mean_total_value': float(results['total_value'].mean()),
-            'total_value_std': float(results['total_value'].std())
-        }
-        
-        # Store estimation metrics
-        metric_series = MetricSeries(
-            name='value_estimation_metrics',
-            timestamp=datetime.now().isoformat(),
-            values=estimation_metrics
-        )
-        metrics_store.save_metric_series(metric_series)
-        
-        logger.info(f"Value estimation completed in {estimate_time:.2f}s for {len(data)} trees")
-        return results
-        
-    def _calculate_base_values(self, data: pd.DataFrame) -> np.ndarray:
-        """Calculate base values considering size, species, and health."""
-        # Base value calculations based on trunk formula method
-        base_values = data['diameter'] * 100  # $100 per inch of diameter as base
-        
-        # Adjust for health
-        health_multipliers = {'Poor': 0.4, 'Fair': 0.7, 'Good': 1.0}
-        health_factors = data['health'].map(health_multipliers).fillna(0.7)
-        
-        # Species value adjustment (simplified)
-        species_multipliers = {
-            'Oak': 1.2,
-            'Maple': 1.1,
-            'Pine': 0.9
-            # Add more species multipliers as needed
-        }
-        species_factors = data['species'].map(species_multipliers).fillna(1.0)
-        
-        return base_values * health_factors * species_factors
-        
-    def _calculate_ecosystem_value(self, data: pd.DataFrame) -> pd.Series:
-        """Calculate monetary value of ecosystem services."""
-        # Values based on research studies (simplified)
-        co2_price_per_lb = 0.05  # Carbon credit price
-        o2_value_per_lb = 0.03   # Oxygen production value
-        water_value_per_gallon = 0.01  # Stormwater management value
-        
-        # Get environmental impact metrics
-        impact = calculate_environmental_impact(data)
-        
-        eco_values = (
-            impact['co2_absorbed_lbs_per_year'] * co2_price_per_lb +
-            impact['o2_produced_lbs_per_year'] * o2_value_per_lb +
-            impact['rainfall_intercepted_gallons'] * water_value_per_gallon
-        )
-        
-        # Convert to present value assuming 20-year lifespan and 5% discount rate
-        discount_rate = 0.05
-        years = 20
-        present_value_factor = (1 - (1 + discount_rate)**-years) / discount_rate
-        
-        return eco_values * present_value_factor
-        
-    def _calculate_property_impact(self, data: pd.DataFrame) -> pd.Series:
-        """Estimate impact on property values."""
-        # Based on research showing trees can increase property value by 3-15%
-        avg_property_value = 300000  # Placeholder - should be location-based
-        
-        # Calculate impact based on tree size and health
-        max_impact_pct = 0.05  # Maximum 5% impact per tree
-        
-        size_factor = (data['diameter'] / 100).clip(0, 1)  # Normalize by max expected size
-        health_impact = {'Poor': 0.3, 'Fair': 0.7, 'Good': 1.0}
-        health_factor = data['health'].map(health_impact).fillna(0.7)
-        
-        impact_pct = max_impact_pct * size_factor * health_factor
-        return impact_pct * avg_property_value
+        return self.scaler.fit_transform(features)
+
+    def _save_model(self, metrics: Dict[str, Any]) -> None:
+        """Save model and metrics with version control."""
+        model_file = self.model_path / f"health_predictor_{self.model_version}.joblib"
+        metrics_file = self.model_path / f"health_predictor_{self.model_version}_metrics.json"
+
+        joblib.dump(self.model, model_file)
+        with open(metrics_file, 'w') as f:
+            json.dump(metrics, f)
+
+        # Update symlink to latest model
+        latest_link = self.model_path / "health_predictor_latest.joblib"
+        if latest_link.exists():
+            latest_link.unlink()
+        latest_link.symlink_to(model_file.name)
