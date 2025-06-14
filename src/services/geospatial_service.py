@@ -1,252 +1,277 @@
-from typing import List, Dict, Optional, Tuple
-from datetime import datetime, timedelta
-import json
-from redis import Redis
-from sqlalchemy import text
-from sqlalchemy.sql.expression import func
-from geoalchemy2 import Geometry
-from geoalchemy2.functions import ST_AsGeoJSON, ST_Transform
+"""Geospatial service layer for efficient spatial data operations and analysis."""
 
-from src.models.geospatial import TreeLocation, TreeMeasurement, EnvironmentalImpact, Region, ClimateZone
-from src.config.settings import REDIS_HOST, REDIS_PORT, CACHE_TTL
+from typing import Dict, List, Optional, Tuple, Union
+import geopandas as gpd
+import pandas as pd
+import numpy as np
+from shapely.geometry import Point, Polygon, box
+from sqlalchemy import create_engine, text
+import redis
+import json
+from datetime import datetime, timedelta
+import logging
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from ..metrics import collect_latency_metrics
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+@dataclass
+class SpatialQueryConfig:
+    """Configuration for spatial queries."""
+    max_results: int = 1000
+    cache_ttl: int = 3600  # Cache time-to-live in seconds
+    use_cache: bool = True
+    parallel_processing: bool = True
+    chunk_size: int = 100
 
 class GeospatialService:
-    def __init__(self):
-        self.redis_client = Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
-        self.cache_ttl = CACHE_TTL
+    """Service class for handling geospatial operations with PostGIS and Redis caching."""
 
-    def _get_cache_key(self, prefix: str, **kwargs) -> str:
-        """Generate a cache key based on the prefix and parameters."""
-        sorted_params = sorted(kwargs.items())
-        params_str = '_'.join(f"{k}:{v}" for k, v in sorted_params)
-        return f"tree_dashboard:{prefix}:{params_str}"
+    def __init__(self, postgis_url: str, redis_host: str = 'localhost', redis_port: int = 6379):
+        """Initialize the service with database and cache connections."""
+        self.postgis_engine = create_engine(postgis_url)
+        self.redis_client = redis.Redis(
+            host=redis_host,
+            port=redis_port,
+            db=0,
+            decode_responses=True
+        )
+        self.query_config = SpatialQueryConfig()
 
-    def _cache_data(self, key: str, data: dict) -> None:
-        """Cache data with the specified key."""
-        self.redis_client.setex(key, self.cache_ttl, json.dumps(data))
+    @collect_latency_metrics
+    def get_trees_in_radius(self, lat: float, lon: float, radius_km: float) -> Dict[str, any]:
+        """Get trees within a specified radius with caching."""
+        cache_key = f"trees_radius_{lat}_{lon}_{radius_km}"
+        
+        if self.query_config.use_cache:
+            cached_result = self.redis_client.get(cache_key)
+            if cached_result:
+                return json.loads(cached_result)
 
-    def _get_cached_data(self, key: str) -> Optional[dict]:
-        """Retrieve cached data for the specified key."""
-        data = self.redis_client.get(key)
-        return json.loads(data) if data else None
-
-    async def get_tree_clusters(self, bounds: Dict[str, float], zoom_level: int) -> List[Dict]:
-        """Get clustered tree locations within the specified bounds."""
-        cache_key = self._get_cache_key('tree_clusters', bounds=json.dumps(bounds), zoom=zoom_level)
-        cached_data = self._get_cached_data(cache_key)
-        if cached_data:
-            return cached_data
-
-        cluster_radius = self._get_cluster_radius(zoom_level)
         query = text("""
-            WITH clusters AS (
+            WITH nearby_trees AS (
                 SELECT 
-                    ST_ClusterDBSCAN(location, eps := :radius, minpoints := 2) over () as cluster_id,
-                    location,
+                    id,
                     species,
-                    health_condition
-                FROM tree_locations
-                WHERE ST_Within(
-                    location,
-                    ST_MakeEnvelope(:min_lon, :min_lat, :max_lon, :max_lat, 4326)
+                    diameter,
+                    height,
+                    health,
+                    ST_AsGeoJSON(geom) as geometry,
+                    ST_Distance(
+                        geom,
+                        ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography
+                    ) as distance
+                FROM tree_inventory
+                WHERE ST_DWithin(
+                    geom,
+                    ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography,
+                    :radius
                 )
+                ORDER BY distance
+                LIMIT :limit
             )
             SELECT 
-                ST_AsGeoJSON(ST_Centroid(ST_Collect(location))) as centroid,
-                COUNT(*) as tree_count,
-                array_agg(DISTINCT species) as species_list,
-                array_agg(DISTINCT health_condition) as health_conditions
-            FROM clusters
-            GROUP BY cluster_id;
+                json_build_object(
+                    'type', 'FeatureCollection',
+                    'features', json_agg(json_build_object(
+                        'type', 'Feature',
+                        'geometry', geometry::json,
+                        'properties', json_build_object(
+                            'id', id,
+                            'species', species,
+                            'diameter', diameter,
+                            'height', height,
+                            'health', health,
+                            'distance', distance
+                        )
+                    ))
+                ) as geojson
+            FROM nearby_trees;
         """)
 
-        result = await self._execute_query(query, {
-            'radius': cluster_radius,
-            'min_lon': bounds['min_lon'],
-            'min_lat': bounds['min_lat'],
-            'max_lon': bounds['max_lon'],
-            'max_lat': bounds['max_lat']
-        })
+        with self.postgis_engine.connect() as conn:
+            result = conn.execute(
+                query,
+                {
+                    'lat': lat,
+                    'lon': lon,
+                    'radius': radius_km * 1000,  # Convert to meters
+                    'limit': self.query_config.max_results
+                }
+            ).scalar()
 
-        clusters = self._process_cluster_results(result)
-        self._cache_data(cache_key, clusters)
-        return clusters
+        if self.query_config.use_cache:
+            self.redis_client.setex(cache_key, self.query_config.cache_ttl, json.dumps(result))
 
-    async def get_tree_density(self, region_id: Optional[int] = None) -> List[Dict]:
-        """Get tree density statistics by region."""
-        cache_key = self._get_cache_key('tree_density', region_id=region_id)
-        cached_data = self._get_cached_data(cache_key)
-        if cached_data:
-            return cached_data
+        return result
+
+    @collect_latency_metrics
+    def analyze_species_distribution(self, bbox: Tuple[float, float, float, float]) -> Dict[str, any]:
+        """Analyze species distribution within a bounding box."""
+        cache_key = f"species_dist_{'_'.join(map(str, bbox))}"
+        
+        if self.query_config.use_cache:
+            cached_result = self.redis_client.get(cache_key)
+            if cached_result:
+                return json.loads(cached_result)
 
         query = text("""
-            SELECT * FROM tree_density_by_region
-            WHERE (:region_id IS NULL OR region_id = :region_id)
-            ORDER BY trees_per_km2 DESC;
+            WITH species_stats AS (
+                SELECT 
+                    species,
+                    COUNT(*) as count,
+                    AVG(diameter) as avg_diameter,
+                    AVG(height) as avg_height,
+                    json_agg(json_build_object(
+                        'health', health,
+                        'count', COUNT(*)
+                    )) as health_distribution
+                FROM tree_inventory
+                WHERE ST_Within(
+                    geom,
+                    ST_MakeEnvelope(:xmin, :ymin, :xmax, :ymax, 4326)
+                )
+                GROUP BY species
+            )
+            SELECT json_build_object(
+                'total_trees', (SELECT COUNT(*) FROM tree_inventory),
+                'species_distribution', json_agg(json_build_object(
+                    'species', species,
+                    'count', count,
+                    'avg_diameter', avg_diameter,
+                    'avg_height', avg_height,
+                    'health_distribution', health_distribution
+                ))
+            ) as stats
+            FROM species_stats;
         """)
 
-        result = await self._execute_query(query, {'region_id': region_id})
-        density_data = self._process_density_results(result)
-        self._cache_data(cache_key, density_data)
-        return density_data
+        with self.postgis_engine.connect() as conn:
+            result = conn.execute(
+                query,
+                {
+                    'xmin': bbox[0],
+                    'ymin': bbox[1],
+                    'xmax': bbox[2],
+                    'ymax': bbox[3]
+                }
+            ).scalar()
 
-    async def get_environmental_impact(self, region_id: Optional[int] = None, 
-                                     start_date: Optional[datetime] = None,
-                                     end_date: Optional[datetime] = None) -> Dict:
-        """Calculate environmental impact metrics for trees in a region."""
-        cache_key = self._get_cache_key('environmental_impact', 
-                                      region_id=region_id,
-                                      start_date=start_date.isoformat() if start_date else None,
-                                      end_date=end_date.isoformat() if end_date else None)
-        cached_data = self._get_cached_data(cache_key)
-        if cached_data:
-            return cached_data
+        if self.query_config.use_cache:
+            self.redis_client.setex(cache_key, self.query_config.cache_ttl, json.dumps(result))
+
+        return result
+
+    @collect_latency_metrics
+    def calculate_environmental_impact(self, region_id: int) -> Dict[str, any]:
+        """Calculate environmental impact metrics for a region."""
+        cache_key = f"env_impact_{region_id}"
+        
+        if self.query_config.use_cache:
+            cached_result = self.redis_client.get(cache_key)
+            if cached_result:
+                return json.loads(cached_result)
 
         query = text("""
-            WITH tree_impacts AS (
+            WITH region_trees AS (
                 SELECT 
-                    ei.co2_absorption,
-                    ei.oxygen_production,
-                    ei.water_filtration,
-                    t.species,
-                    t.health_condition
-                FROM environmental_impacts ei
-                JOIN tree_locations t ON ei.tree_id = t.id
-                WHERE 
-                    (:region_id IS NULL OR 
-                     ST_Contains((SELECT boundary FROM regions WHERE id = :region_id), t.location))
-                    AND (:start_date IS NULL OR ei.calculation_date >= :start_date)
-                    AND (:end_date IS NULL OR ei.calculation_date <= :end_date)
+                    t.*,
+                    c.temperature,
+                    c.precipitation
+                FROM tree_inventory t
+                JOIN regions r ON ST_Within(t.geom, r.geom)
+                LEFT JOIN LATERAL (
+                    SELECT temperature, precipitation
+                    FROM climate_data cd
+                    WHERE ST_DWithin(t.geom, cd.geom, 1000)
+                    ORDER BY t.geom <-> cd.geom
+                    LIMIT 1
+                ) c ON true
+                WHERE r.id = :region_id
             )
-            SELECT 
-                SUM(co2_absorption) as total_co2_absorbed,
-                SUM(oxygen_production) as total_oxygen_produced,
-                SUM(water_filtration) as total_water_filtered,
-                COUNT(DISTINCT species) as unique_species,
-                json_object_agg(health_condition, COUNT(*)) as health_distribution
-            FROM tree_impacts;
+            SELECT json_build_object(
+                'tree_metrics', json_build_object(
+                    'total_trees', COUNT(*),
+                    'avg_diameter', AVG(diameter),
+                    'total_canopy_area', SUM(PI() * POWER(diameter/2, 2)),
+                    'species_diversity', COUNT(DISTINCT species)
+                ),
+                'environmental_metrics', json_build_object(
+                    'avg_temperature', AVG(temperature),
+                    'total_precipitation', SUM(precipitation),
+                    'carbon_sequestration', SUM(POWER(diameter, 2) * 0.15)
+                )
+            ) as impact
+            FROM region_trees;
         """)
 
-        result = await self._execute_query(query, {
-            'region_id': region_id,
-            'start_date': start_date,
-            'end_date': end_date or datetime.now()
-        })
+        with self.postgis_engine.connect() as conn:
+            result = conn.execute(query, {'region_id': region_id}).scalar()
 
-        impact_data = self._process_impact_results(result)
-        self._cache_data(cache_key, impact_data)
-        return impact_data
+        if self.query_config.use_cache:
+            self.redis_client.setex(cache_key, self.query_config.cache_ttl, json.dumps(result))
 
-    async def get_historical_trends(self, metric: str, 
-                                  interval: str = 'month',
-                                  start_date: Optional[datetime] = None,
-                                  end_date: Optional[datetime] = None) -> List[Dict]:
-        """Get historical trends for specified metrics."""
-        cache_key = self._get_cache_key('historical_trends',
-                                      metric=metric,
-                                      interval=interval,
-                                      start_date=start_date.isoformat() if start_date else None,
-                                      end_date=end_date.isoformat() if end_date else None)
-        cached_data = self._get_cached_data(cache_key)
-        if cached_data:
-            return cached_data
+        return result
 
-        interval_sql = self._get_interval_sql(interval)
-        query = text(f"""
-            WITH time_series AS (
+    @collect_latency_metrics
+    def get_tree_density_heatmap(self, bbox: Tuple[float, float, float, float], grid_size_km: float = 1.0) -> Dict[str, any]:
+        """Generate tree density heatmap with climate correlation."""
+        cache_key = f"density_heatmap_{'_'.join(map(str, bbox))}_{grid_size_km}"
+        
+        if self.query_config.use_cache:
+            cached_result = self.redis_client.get(cache_key)
+            if cached_result:
+                return json.loads(cached_result)
+
+        query = text("""
+            WITH grid AS (
+                SELECT (ST_SquareGrid(
+                    :grid_size,
+                    ST_MakeEnvelope(:xmin, :ymin, :xmax, :ymax, 4326)
+                )).*
+            ),
+            grid_stats AS (
                 SELECT 
-                    date_trunc(:interval, measurement_date) as period,
-                    AVG(CASE 
-                        WHEN :metric = 'height' THEN height
-                        WHEN :metric = 'diameter' THEN diameter
-                        WHEN :metric = 'canopy_width' THEN canopy_width
-                    END) as avg_value,
-                    COUNT(*) as measurement_count
-                FROM tree_measurements
-                WHERE 
-                    measurement_date >= :start_date
-                    AND measurement_date <= :end_date
-                GROUP BY period
-                ORDER BY period
+                    g.geom,
+                    COUNT(t.*) as tree_count,
+                    AVG(c.temperature) as avg_temperature,
+                    AVG(c.precipitation) as avg_precipitation
+                FROM grid g
+                LEFT JOIN tree_inventory t ON ST_Within(t.geom, g.geom)
+                LEFT JOIN climate_data c ON ST_Within(c.geom, g.geom)
+                GROUP BY g.geom
             )
-            SELECT 
-                period,
-                avg_value,
-                measurement_count,
-                LAG(avg_value) OVER (ORDER BY period) as prev_value
-            FROM time_series;
+            SELECT json_build_object(
+                'type', 'FeatureCollection',
+                'features', json_agg(json_build_object(
+                    'type', 'Feature',
+                    'geometry', ST_AsGeoJSON(geom)::json,
+                    'properties', json_build_object(
+                        'tree_count', tree_count,
+                        'avg_temperature', avg_temperature,
+                        'avg_precipitation', avg_precipitation
+                    )
+                ))
+            ) as heatmap
+            FROM grid_stats;
         """)
 
-        result = await self._execute_query(query, {
-            'interval': interval,
-            'metric': metric,
-            'start_date': start_date or datetime.now() - timedelta(days=365),
-            'end_date': end_date or datetime.now()
-        })
+        with self.postgis_engine.connect() as conn:
+            result = conn.execute(
+                query,
+                {
+                    'grid_size': grid_size_km * 1000,  # Convert to meters
+                    'xmin': bbox[0],
+                    'ymin': bbox[1],
+                    'xmax': bbox[2],
+                    'ymax': bbox[3]
+                }
+            ).scalar()
 
-        trend_data = self._process_trend_results(result)
-        self._cache_data(cache_key, trend_data)
-        return trend_data
+        if self.query_config.use_cache:
+            self.redis_client.setex(cache_key, self.query_config.cache_ttl, json.dumps(result))
 
-    def _get_cluster_radius(self, zoom_level: int) -> float:
-        """Calculate clustering radius based on zoom level."""
-        base_radius = 0.1  # degrees
-        return base_radius * (2 ** (15 - zoom_level))
-
-    def _get_interval_sql(self, interval: str) -> str:
-        """Get SQL interval string based on specified interval."""
-        intervals = {
-            'day': 'day',
-            'week': 'week',
-            'month': 'month',
-            'quarter': 'quarter',
-            'year': 'year'
-        }
-        return intervals.get(interval.lower(), 'month')
-
-    async def _execute_query(self, query: text, params: Dict) -> List[Dict]:
-        """Execute SQL query with parameters."""
-        # Implementation depends on your database connection setup
-        pass
-
-    def _process_cluster_results(self, results: List[Dict]) -> List[Dict]:
-        """Process raw cluster query results into formatted response."""
-        return [{
-            'centroid': json.loads(row['centroid']),
-            'tree_count': row['tree_count'],
-            'species': row['species_list'],
-            'health_conditions': row['health_conditions']
-        } for row in results]
-
-    def _process_density_results(self, results: List[Dict]) -> List[Dict]:
-        """Process raw density query results into formatted response."""
-        return [{
-            'region_id': row['region_id'],
-            'region_name': row['region_name'],
-            'tree_count': row['tree_count'],
-            'area_km2': float(row['area_km2']),
-            'trees_per_km2': float(row['trees_per_km2'])
-        } for row in results]
-
-    def _process_impact_results(self, results: List[Dict]) -> Dict:
-        """Process raw environmental impact results into formatted response."""
-        row = results[0] if results else {}
-        return {
-            'total_co2_absorbed': float(row.get('total_co2_absorbed', 0)),
-            'total_oxygen_produced': float(row.get('total_oxygen_produced', 0)),
-            'total_water_filtered': float(row.get('total_water_filtered', 0)),
-            'unique_species': int(row.get('unique_species', 0)),
-            'health_distribution': json.loads(row.get('health_distribution', '{}'))
-        }
-
-    def _process_trend_results(self, results: List[Dict]) -> List[Dict]:
-        """Process raw trend query results into formatted response."""
-        return [{
-            'period': row['period'].isoformat(),
-            'value': float(row['avg_value']),
-            'count': int(row['measurement_count']),
-            'change_percent': (
-                ((float(row['avg_value']) - float(row['prev_value'])) / float(row['prev_value']) * 100)
-                if row['prev_value'] is not None else 0
-            )
-        } for row in results]
+        return result
