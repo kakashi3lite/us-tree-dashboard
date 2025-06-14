@@ -1,0 +1,92 @@
+groups:
+  - name: tree_dashboard_alerts
+    rules:
+      - alert: HighResponseTime
+        expr: rate(http_request_duration_seconds_sum[5m]) / rate(http_request_duration_seconds_count[5m]) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: High response time (instance {{ $labels.instance }})
+          description: Average response time is above 500ms
+
+      - alert: HighErrorRate
+        expr: rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: High error rate (instance {{ $labels.instance }})
+          description: Error rate is above 5%
+
+      - alert: HighCPUUsage
+        expr: rate(process_cpu_seconds_total[5m]) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: High CPU usage (instance {{ $labels.instance }})
+          description: CPU usage is above 80%
+
+      - alert: HighMemoryUsage
+        expr: process_resident_memory_bytes / process_virtual_memory_bytes > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: High memory usage (instance {{ $labels.instance }})
+          description: Memory usage is above 80%
+
+      - alert: SlowDatabaseQueries
+        expr: rate(postgres_query_duration_seconds_sum[5m]) / rate(postgres_query_duration_seconds_count[5m]) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Slow database queries (instance {{ $labels.instance }})
+          description: Average query duration is above 1 second
+
+      - alert: HighCacheEvictionRate
+        expr: rate(redis_evicted_keys_total[5m]) > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: High cache eviction rate (instance {{ $labels.instance }})
+          description: Redis is evicting more than 100 keys per second
+
+      - alert: LowDiskSpace
+        expr: node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Low disk space (instance {{ $labels.instance }})
+          description: Disk space is below 10%
+
+      - alert: HighConcurrentUsers
+        expr: sum(rate(http_requests_total[5m])) by (instance) > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: High concurrent users (instance {{ $labels.instance }})
+          description: More than 1000 requests per second
+
+      - alert: ModelPredictionLatency
+        expr: rate(ml_prediction_duration_seconds_sum[5m]) / rate(ml_prediction_duration_seconds_count[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: High model prediction latency (instance {{ $labels.instance }})
+          description: Average prediction time is above 100ms
+
+      - alert: DataValidationErrors
+        expr: rate(data_validation_errors_total[5m]) > 10
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: High data validation errors (instance {{ $labels.instance }})
+          description: More than 10 validation errors per second
