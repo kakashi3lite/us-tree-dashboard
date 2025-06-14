@@ -1,115 +1,118 @@
-import dash
-from dash import html, dcc
-import dash_bootstrap_components as dbc
+import os
 from flask import Flask
-from src.metrics.environmental_metrics import EnvironmentalMetrics
-from src.metrics.model_metrics import ModelMetrics
-from src.metrics.performance_metrics import PerformanceMetrics
-from src.config import Config, ErrorConfig
-from src.error_handlers import init_error_handlers, handle_exceptions
-import logging
+from flask_cors import CORS
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from prometheus_client import make_wsgi_app
+from werkzeug.middleware.dispatcher import DispatcherMiddleware
+from werkzeug.middleware.proxy_fix import ProxyFix
 
-# Initialize logging
-Config.init_logging()
-logger = logging.getLogger(__name__)
-
-# Initialize the Flask server
-server = Flask(__name__)
-
-# Initialize Dash app with Flask server
-app = dash.Dash(
-    __name__,
-    server=server,
-    external_stylesheets=[dbc.themes.BOOTSTRAP],
-    suppress_callback_exceptions=True
+from src.api.routes import api
+from src.monitoring.logger import setup_monitoring
+from src.monitoring.metrics import MetricsCollector, MetricsConfig
+from src.error_handlers import register_error_handlers
+from src.config.settings import (
+    FLASK_ENV,
+    SECRET_KEY,
+    CORS_ORIGINS,
+    ENABLE_PROMETHEUS,
+    LOG_LEVEL
 )
 
-# Initialize error handlers
-init_error_handlers(server)
+def create_app():
+    """Create and configure the Flask application."""
+    app = Flask(__name__)
+    app.config.from_object('src.config.settings')
+    app.secret_key = SECRET_KEY
 
-# Create instances of metric classes with error handling
-try:
-    environmental_metrics = EnvironmentalMetrics()
-    model_metrics = ModelMetrics()
-    performance_metrics = PerformanceMetrics()
-    logger.info('Successfully initialized metric components')
-except Exception as e:
-    logger.error(f'Failed to initialize metric components: {str(e)}')
-    raise
+    # Configure logging and monitoring
+    logger = setup_monitoring('us_tree_dashboard')
+    metrics_config = MetricsConfig(
+        app_name='us_tree_dashboard',
+        environment=FLASK_ENV,
+        enable_prometheus=ENABLE_PROMETHEUS
+    )
+    metrics_collector = MetricsCollector(metrics_config)
 
-# App layout
-app.layout = dbc.Container([
-    dbc.Row([
-        dbc.Col([
-            html.H1("US Tree Dashboard", className="text-center mb-4"),
-            html.P("Interactive visualization of US tree data with ML insights",
-                   className="text-center text-muted")
-        ])
-    ]),
-    
-    dbc.Row([
-        dbc.Col([
-            dbc.Card([
-                dbc.CardHeader("Environmental Metrics"),
-                dbc.CardBody(id='environmental-metrics')
-            ], className="mb-4")
-        ], md=6),
-        
-        dbc.Col([
-            dbc.Card([
-                dbc.CardHeader("Model Metrics"),
-                dbc.CardBody(id='model-metrics')
-            ], className="mb-4")
-        ], md=6)
-    ]),
-    
-    dbc.Row([
-        dbc.Col([
-            dbc.Card([
-                dbc.CardHeader("Performance Metrics"),
-                dbc.CardBody(id='performance-metrics')
-            ])
-        ])
-    ])
-], fluid=True)
+    # Configure CORS
+    CORS(app, resources={
+        r"/api/*": {"origins": CORS_ORIGINS}
+    })
 
-# Callback for environmental metrics
-@app.callback(
-    dash.dependencies.Output('environmental-metrics', 'children'),
-    [dash.dependencies.Input('url', 'pathname')]
-)
-@handle_exceptions
-def update_environmental_metrics(_):
-    return environmental_metrics.get_visualization()
+    # Configure rate limiting
+    limiter = Limiter(
+        app=app,
+        key_func=get_remote_address,
+        default_limits=["200 per day", "50 per hour"]
+    )
 
-# Callback for model metrics
-@app.callback(
-    dash.dependencies.Output('model-metrics', 'children'),
-    [dash.dependencies.Input('url', 'pathname')]
-)
-@handle_exceptions
-def update_model_metrics(_):
-    return model_metrics.get_visualization()
+    # Register blueprints
+    app.register_blueprint(api, url_prefix='/api')
 
-# Callback for performance metrics
-@app.callback(
-    dash.dependencies.Output('performance-metrics', 'children'),
-    [dash.dependencies.Input('url', 'pathname')]
-)
-@handle_exceptions
-def update_performance_metrics(_):
-    return performance_metrics.get_visualization()
+    # Register error handlers
+    register_error_handlers(app)
 
-# Error handling for the main application
-@server.errorhandler(Exception)
-def handle_error(error):
-    logger.error(f'Unhandled error: {str(error)}')
-    return ErrorConfig.get_error_response('system_error'), 500
+    # Configure Prometheus metrics endpoint
+    if ENABLE_PROMETHEUS:
+        app.wsgi_app = DispatcherMiddleware(
+            app.wsgi_app,
+            {
+                '/metrics': make_wsgi_app()
+            }
+        )
+
+    # Configure proxy settings
+    app.wsgi_app = ProxyFix(
+        app.wsgi_app,
+        x_for=1,
+        x_proto=1,
+        x_host=1,
+        x_port=1,
+        x_prefix=1
+    )
+
+    # Request handlers for metrics collection
+    @app.before_request
+    def before_request():
+        from flask import request, g
+        import time
+        g.start_time = time.time()
+
+    @app.after_request
+    def after_request(response):
+        from flask import request, g
+        import time
+
+        # Skip metrics collection for prometheus endpoint
+        if request.path == '/metrics':
+            return response
+
+        duration = time.time() - g.start_time
+        metrics_collector.record_api_request(
+            endpoint=request.endpoint,
+            method=request.method,
+            status=str(response.status_code),
+            duration=duration
+        )
+
+        return response
+
+    return app
+
+def run_app(app):
+    """Run the Flask application with the appropriate configuration."""
+    host = os.getenv('FLASK_HOST', '0.0.0.0')
+    port = int(os.getenv('FLASK_PORT', 8050))
+    debug = FLASK_ENV == 'development'
+
+    app.run(
+        host=host,
+        port=port,
+        debug=debug,
+        use_reloader=debug,
+        threaded=True
+    )
 
 if __name__ == '__main__':
-    try:
-        logger.info('Starting the application')
-        app.run(host='0.0.0.0', port=8050, debug=Config.DEBUG)
-    except Exception as e:
-        logger.critical(f'Failed to start application: {str(e)}')
-        raise
+    app = create_app()
+    run_app(app)
