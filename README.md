@@ -1,213 +1,156 @@
-# US Tree Dashboard
+# US Tree Dashboard 🌳
 
-An advanced geospatial analytics platform for urban forest management and environmental impact analysis.
+## Overview
+A scalable, cloud-native dashboard for visualizing and analyzing US tree data with advanced geospatial capabilities, real-time updates, and environmental impact tracking.
 
-## 🌟 Features
+## Architecture
 
-### Interactive Data Exploration
-- Drag-and-drop custom data layer creation
-- Time-slider for historical trend visualization
-- Advanced query builder for custom geospatial analysis
-- Real-time collaborative analysis tools
-- Mobile-optimized interface
+### Microservices Infrastructure
+- **Dashboard Service**: Python-based frontend with real-time visualization
+- **Data Processing**: Distributed processing with Apache Spark
+- **Storage Layer**: PostGIS for spatial data, Redis for caching
+- **Search & Analytics**: Elasticsearch for fast data retrieval
+- **Monitoring Stack**: Prometheus, Grafana, and ELK Stack
 
-### Advanced Analytics
-- Climate scenario modeling
-- Species migration forecasting
-- Ecosystem service valuation
-- AI-powered natural language queries
-- Automated report generation
+### Scalability Features
+- Kubernetes-based container orchestration
+- Horizontal pod autoscaling (2-10 replicas)
+- Redis cluster for distributed caching
+- Load balancing with Nginx
+- Stateful database management
 
-### Environmental Analysis
-- Real-time environmental sensor integration
-- Climate impact assessment
-- Biodiversity metrics
-- Carbon sequestration calculations
-- Urban heat island analysis
-
-### Data Quality
-- Automated validation pipelines
-- Anomaly detection
-- Regular model performance evaluation
-- Data integrity checks
-- Version control for datasets
-
-## 🚀 Getting Started
+## Getting Started
 
 ### Prerequisites
 - Docker and Docker Compose
-- Git
-- AWS Account (for S3 storage)
-- Node.js 16+ (for local development)
+- Kubernetes cluster (for production)
+- Helm (for Kubernetes deployments)
 
-### Installation
-
-1. Clone the repository:
+### Local Development
 ```bash
+# Clone the repository
 git clone https://github.com/kakashi3lite/us-tree-dashboard.git
 cd us-tree-dashboard
-```
 
-2. Set up environment variables:
-```bash
-cp .env.example .env
-# Edit .env with your configuration
-```
-
-3. Start the services:
-```bash
+# Start services with Docker Compose
 docker-compose up -d
+
+# Access the dashboard
+open http://localhost:8050
 ```
 
-4. Initialize the database:
+### Production Deployment
 ```bash
-docker-compose exec dashboard python init_db.py
+# Deploy to Kubernetes
+kubectl apply -f k8s/
+
+# Verify deployment
+kubectl get pods
 ```
 
-### Development Setup
+## Monitoring & Observability
 
-1. Install dependencies:
-```bash
-pip install -r requirements.txt
-npm install
-```
+### Metrics & Dashboards
+- Grafana: `http://localhost:3000`
+  - System metrics dashboard
+  - Application performance metrics
+  - Geospatial query analytics
 
-2. Run development server:
-```bash
-npm run dev
-```
+### Logging
+- Elasticsearch + Kibana for log aggregation
+- Structured logging with correlation IDs
+- Real-time log streaming
 
-## 🏗️ Architecture
+### Alerts
+- Prometheus AlertManager integration
+- Customizable alert rules for:
+  - System health
+  - Performance thresholds
+  - Data quality
 
-### Infrastructure Components
-- **Dashboard**: Flask application with React frontend
-- **PostgreSQL/PostGIS**: Geospatial database
-- **Redis**: Caching and real-time features
-- **TimescaleDB**: Time-series data storage
-- **Elasticsearch**: Full-text search and logging
-- **Nginx**: Load balancing and caching
-- **Prometheus/Grafana**: Monitoring and visualization
+## Performance Optimization
 
-### Performance Optimizations
-- Distributed caching
-- Spatial indexing
+### Caching Strategy
+- Multi-level caching with Redis
+- Spatial data caching
+- Query result caching
+
+### Database Optimization
+- PostGIS spatial indexing
+- Partitioned tables
 - Query optimization
-- Load balancing
-- Auto-scaling
 
-## 📊 Monitoring
-
-### Metrics Dashboard
-- Access Grafana: `http://localhost:3000`
-- Default credentials: admin/admin
-
-### Available Metrics
-- Response times
-- Error rates
-- Resource usage
-- Cache hit rates
-- Query performance
-- Model prediction latency
-
-## 🔒 Security
-
-### Features
+### Load Balancing
+- Nginx reverse proxy
+- Session persistence
 - Rate limiting
-- Input validation
-- SQL injection prevention
-- XSS protection
-- CSRF protection
 
-### Authentication
+## Security
+
+### Authentication & Authorization
 - JWT-based authentication
 - Role-based access control
 - API key management
 
-## 📱 Mobile Support
+### Data Protection
+- TLS encryption
+- Data encryption at rest
+- Regular security audits
 
-### Features
-- Responsive design
-- Touch-optimized controls
-- Offline capabilities
-- Progressive Web App
+## API Documentation
 
-## 🤝 Contributing
+### RESTful Endpoints
+```
+GET /api/v1/trees/nearby?lat={lat}&lon={lon}&radius={meters}
+GET /api/v1/trees/species/{species_name}
+GET /api/v1/environmental-impact/{tree_id}
+```
 
+### WebSocket API
+```
+ws://localhost:8050/ws
+- Real-time updates
+- Live filtering
+- Data streaming
+```
+
+## Configuration
+
+### Environment Variables
+```env
+# Core Services
+POSTGRES_HOST=postgres
+REDIS_HOST=redis
+ELASTICSEARCH_HOST=elasticsearch
+
+# Monitoring
+PROMETHEUS_HOST=prometheus
+GRAFANA_HOST=grafana
+
+# Security
+JWT_SECRET=your-secret-key
+API_KEY=your-api-key
+```
+
+## Contributing
 1. Fork the repository
-2. Create your feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
+2. Create a feature branch
+3. Submit a pull request
 
 ### Development Guidelines
 - Follow PEP 8 style guide
 - Write unit tests
 - Update documentation
-- Add appropriate logging
 
-## 📄 API Documentation
+## License
+MIT License
 
-### Base URL
-```
-http://localhost:8050/api/v1
-```
-
-### Authentication
-```
-Authorization: Bearer <your_token>
-```
-
-### Endpoints
-- `/trees`: Tree data management
-- `/analysis`: Environmental analysis
-- `/predictions`: ML predictions
-- `/reports`: Report generation
-
-## 🔧 Configuration
-
-### Environment Variables
-- See `.env.example` for available options
-
-### Service Configuration
-- Nginx: `nginx.conf`
-- Prometheus: `prometheus.yml`
-- Alert Rules: `alert.rules.yml`
-
-## 📈 Performance
-
-### Benchmarks
-- Response time: <500ms for complex queries
-- Concurrent users: Up to 100,000
-- Data accuracy: 99.9%
-- Cache hit rate: >90%
-
-## 🐛 Troubleshooting
-
-### Common Issues
-1. Database connection errors
-   - Check PostgreSQL service status
-   - Verify connection strings
-
-2. Slow queries
-   - Check index usage
-   - Review query plans
-
-3. Memory issues
-   - Adjust cache sizes
-   - Monitor resource usage
-
-## 📞 Support
-
+## Support
 - GitHub Issues
 - Documentation Wiki
 - Community Forums
 
-## 📜 License
-
-MIT License - see LICENSE.md
-
-## 🙏 Acknowledgments
-
-- OpenStreetMap contributors
-- USDA Forest Service
-- Environmental research community
+## Acknowledgments
+- Contributors
+- Data providers
+- Open source community
