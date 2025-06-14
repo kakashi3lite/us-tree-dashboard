@@ -1,153 +1,132 @@
-import React, { useMemo } from 'react';
-import { useQuery } from 'react-query';
-import {
-  ResponsiveContainer,
-  LineChart,
-  Line,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend
-} from 'recharts';
-import { Card, CardContent, Typography, Grid, useMediaQuery } from '@mui/material';
-import { format } from 'date-fns';
-import { fetchHistoricalTrends, fetchEnvironmentalImpact } from '../services/api';
+import React, { useEffect, useRef } from 'react';
+import * as d3 from 'd3';
+import { useEnvironmentalContext } from '../contexts/EnvironmentalContext';
 
-const DataVisualization = ({ regionId, startDate, endDate }) => {
-  const isMobile = useMediaQuery('(max-width:600px)');
+const DataVisualization = () => {
+  const svgRef = useRef(null);
+  const tooltipRef = useRef(null);
+  const { environmentalMetrics } = useEnvironmentalContext();
 
-  const { data: trends = {} } = useQuery(
-    ['historicalTrends', regionId, startDate, endDate],
-    () => fetchHistoricalTrends('height', 'month', startDate, endDate),
-    {
-      keepPreviousData: true,
-      staleTime: 300000
-    }
-  );
+  useEffect(() => {
+    if (!environmentalMetrics || !environmentalMetrics.species_distribution) return;
 
-  const { data: impact = {} } = useQuery(
-    ['environmentalImpact', regionId, startDate, endDate],
-    () => fetchEnvironmentalImpact(regionId, startDate, endDate),
-    {
-      keepPreviousData: true,
-      staleTime: 300000
-    }
-  );
+    const margin = { top: 20, right: 20, bottom: 40, left: 60 };
+    const width = 600 - margin.left - margin.right;
+    const height = 400 - margin.top - margin.bottom;
 
-  const formattedTrends = useMemo(() => {
-    return trends.map(point => ({
-      ...point,
-      period: format(new Date(point.period), 'MMM yyyy'),
-      value: Number(point.value).toFixed(2),
-      changePercent: Number(point.change_percent).toFixed(1)
-    }));
-  }, [trends]);
+    // Clear previous SVG
+    d3.select(svgRef.current).selectAll('*').remove();
 
-  const impactMetrics = useMemo(() => [
-    {
-      label: 'CO₂ Absorbed',
-      value: `${Number(impact.total_co2_absorbed || 0).toFixed(1)} tons`,
-      color: '#2196f3'
-    },
-    {
-      label: 'Oxygen Produced',
-      value: `${Number(impact.total_oxygen_produced || 0).toFixed(1)} tons`,
-      color: '#4caf50'
-    },
-    {
-      label: 'Water Filtered',
-      value: `${Number(impact.total_water_filtered || 0).toFixed(1)} gallons`,
-      color: '#03a9f4'
-    }
-  ], [impact]);
+    const svg = d3.select(svgRef.current)
+      .attr('width', width + margin.left + margin.right)
+      .attr('height', height + margin.top + margin.bottom)
+      .append('g')
+      .attr('transform', `translate(${margin.left},${margin.top})`);
 
-  const chartHeight = isMobile ? 200 : 300;
+    // Prepare data
+    const data = environmentalMetrics.species_distribution
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 10); // Top 10 species
+
+    // Scales
+    const x = d3.scaleBand()
+      .range([0, width])
+      .padding(0.1);
+
+    const y = d3.scaleLinear()
+      .range([height, 0]);
+
+    x.domain(data.map(d => d.species));
+    y.domain([0, d3.max(data, d => d.count)]);
+
+    // Add X axis
+    svg.append('g')
+      .attr('transform', `translate(0,${height})`)
+      .call(d3.axisBottom(x))
+      .selectAll('text')
+      .attr('transform', 'rotate(-45)')
+      .style('text-anchor', 'end');
+
+    // Add Y axis
+    svg.append('g')
+      .call(d3.axisLeft(y));
+
+    // Create tooltip
+    const tooltip = d3.select(tooltipRef.current);
+
+    // Add bars
+    svg.selectAll('.bar')
+      .data(data)
+      .enter()
+      .append('rect')
+      .attr('class', 'bar')
+      .attr('x', d => x(d.species))
+      .attr('width', x.bandwidth())
+      .attr('y', d => y(d.count))
+      .attr('height', d => height - y(d.count))
+      .attr('fill', '#69b3a2')
+      .on('mouseover', (event, d) => {
+        tooltip
+          .style('opacity', 1)
+          .html(`
+            <strong>${d.species}</strong><br/>
+            Count: ${d.count}<br/>
+            Avg Height: ${d.avg_height.toFixed(2)}m<br/>
+            Avg Diameter: ${d.avg_diameter.toFixed(2)}cm
+          `)
+          .style('left', `${event.pageX + 10}px`)
+          .style('top', `${event.pageY - 28}px`);
+      })
+      .on('mouseout', () => {
+        tooltip.style('opacity', 0);
+      });
+
+    // Add title
+    svg.append('text')
+      .attr('x', width / 2)
+      .attr('y', 0 - margin.top / 2)
+      .attr('text-anchor', 'middle')
+      .style('font-size', '16px')
+      .text('Top 10 Tree Species Distribution');
+
+    // Add labels
+    svg.append('text')
+      .attr('transform', 'rotate(-90)')
+      .attr('y', 0 - margin.left)
+      .attr('x', 0 - height / 2)
+      .attr('dy', '1em')
+      .style('text-anchor', 'middle')
+      .text('Number of Trees');
+
+  }, [environmentalMetrics]);
 
   return (
-    <Grid container spacing={3}>
-      <Grid item xs={12} md={8}>
-        <Card>
-          <CardContent>
-            <Typography variant="h6" gutterBottom>
-              Tree Growth Trends
-            </Typography>
-            <ResponsiveContainer width="100%" height={chartHeight}>
-              <LineChart data={formattedTrends}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis
-                  dataKey="period"
-                  angle={-45}
-                  textAnchor="end"
-                  height={60}
-                  interval={isMobile ? 1 : 0}
-                />
-                <YAxis />
-                <Tooltip
-                  formatter={(value, name) => [
-                    `${value} ft`,
-                    name === 'value' ? 'Height' : 'Change'
-                  ]}
-                />
-                <Legend />
-                <Line
-                  type="monotone"
-                  dataKey="value"
-                  stroke="#2196f3"
-                  strokeWidth={2}
-                  dot={false}
-                  name="Height"
-                />
-                <Line
-                  type="monotone"
-                  dataKey="changePercent"
-                  stroke="#4caf50"
-                  strokeWidth={2}
-                  dot={false}
-                  name="Change %"
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-      </Grid>
-
-      <Grid item xs={12} md={4}>
-        <Card>
-          <CardContent>
-            <Typography variant="h6" gutterBottom>
-              Environmental Impact
-            </Typography>
-            <ResponsiveContainer width="100%" height={chartHeight}>
-              <BarChart data={impactMetrics}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis
-                  dataKey="label"
-                  angle={-45}
-                  textAnchor="end"
-                  height={60}
-                  interval={0}
-                />
-                <YAxis />
-                <Tooltip
-                  formatter={(value, name, props) => [
-                    props.payload.value,
-                    props.payload.label
-                  ]}
-                />
-                <Bar
-                  dataKey="value"
-                  fill="#2196f3"
-                  radius={[4, 4, 0, 0]}
-                />
-              </BarChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-      </Grid>
-    </Grid>
+    <div className="visualization-container">
+      <svg ref={svgRef}></svg>
+      <div ref={tooltipRef} className="tooltip"></div>
+      <style jsx>{`
+        .visualization-container {
+          background: white;
+          border-radius: 8px;
+          padding: 20px;
+          box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+          margin: 20px;
+        }
+        .tooltip {
+          position: absolute;
+          padding: 8px;
+          background: rgba(255, 255, 255, 0.9);
+          border: 1px solid #ddd;
+          border-radius: 4px;
+          pointer-events: none;
+          opacity: 0;
+          transition: opacity 0.2s;
+        }
+        :global(.bar:hover) {
+          opacity: 0.8;
+        }
+      `}</style>
+    </div>
   );
 };
 

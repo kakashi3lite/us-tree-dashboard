@@ -1,80 +1,145 @@
 /**
- * Calculate marker size based on tree count and device type
- * @param {number} count - Number of trees in cluster
- * @param {boolean} isMobile - Whether the device is mobile
- * @returns {number} Marker size in pixels
+ * Utility functions for map operations and data processing
  */
-export const calculateMarkerSize = (count, isMobile) => {
-  const baseSize = isMobile ? 4 : 6;
-  const maxSize = isMobile ? 15 : 25;
-  const size = Math.log(count + 1) * baseSize;
-  return Math.min(size, maxSize);
+
+import { scaleLinear } from 'd3-scale';
+import { extent } from 'd3-array';
+
+/**
+ * Calculate the bounding box from a set of coordinates
+ * @param {Array} coordinates Array of [lon, lat] coordinates
+ * @returns {Array} [minLon, minLat, maxLon, maxLat]
+ */
+export const calculateBoundingBox = (coordinates) => {
+  const lons = coordinates.map(coord => coord[0]);
+  const lats = coordinates.map(coord => coord[1]);
+  
+  return [
+    Math.min(...lons),
+    Math.min(...lats),
+    Math.max(...lons),
+    Math.max(...lats)
+  ];
 };
 
 /**
- * Get marker color based on tree health conditions
- * @param {Object} healthConditions - Object containing health condition counts
- * @returns {string} Hex color code
+ * Generate a color scale for tree density visualization
+ * @param {Array} data Array of density values
+ * @returns {Function} Color scale function
  */
-export const getColorByHealth = (healthConditions) => {
-  const total = Object.values(healthConditions).reduce((a, b) => a + b, 0);
-  const healthyCount = healthConditions['Healthy'] || 0;
-  const healthyRatio = healthyCount / total;
-
-  if (healthyRatio >= 0.8) return '#4caf50';  // Mostly healthy - Green
-  if (healthyRatio >= 0.5) return '#ffeb3b';  // Mixed health - Yellow
-  return '#f44336';  // Poor health - Red
+export const createDensityColorScale = (data) => {
+  const [min, max] = extent(data);
+  
+  return scaleLinear()
+    .domain([min, max])
+    .range(['#c6dbef', '#08519c']);
 };
 
 /**
- * Format cluster popup content
- * @param {Object} cluster - Tree cluster data
- * @returns {string} Formatted HTML content
+ * Calculate the optimal zoom level for a bounding box
+ * @param {Array} bbox [minLon, minLat, maxLon, maxLat]
+ * @param {Object} mapSize {width, height} in pixels
+ * @returns {number} Optimal zoom level
  */
-export const formatClusterPopup = (cluster) => {
-  const { tree_count, species, health_conditions } = cluster;
-  const healthStats = Object.entries(health_conditions)
-    .map(([condition, count]) => `${condition}: ${count}`)
-    .join('<br>');
-
-  return `
-    <div class="cluster-popup">
-      <h3>${tree_count} Trees</h3>
-      <p><strong>Species:</strong> ${species.length}</p>
-      <p><strong>Health Distribution:</strong><br>${healthStats}</p>
-    </div>
-  `;
+export const calculateOptimalZoom = (bbox, mapSize) => {
+  const WORLD_WIDTH = 360;
+  const PADDING = 0.1;
+  
+  const lonSpan = bbox[2] - bbox[0];
+  const latSpan = bbox[3] - bbox[1];
+  
+  const latZoom = Math.floor(Math.log2(mapSize.height / 256 / latSpan));
+  const lonZoom = Math.floor(Math.log2(mapSize.width / 256 / lonSpan));
+  
+  return Math.min(latZoom, lonZoom) - PADDING;
 };
 
 /**
- * Calculate viewport bounds from center point
- * @param {Array} center - [latitude, longitude]
- * @param {number} radiusKm - Radius in kilometers
- * @returns {Object} Bounds object with min/max lat/lon
+ * Format tree data for cluster visualization
+ * @param {Array} trees Array of tree objects
+ * @returns {Object} GeoJSON FeatureCollection
  */
-export const calculateViewportBounds = (center, radiusKm) => {
-  const [lat, lon] = center;
-  const latChange = (radiusKm / 111.32);  // 1 degree latitude = 111.32 km
-  const lonChange = (radiusKm / (111.32 * Math.cos(lat * Math.PI / 180)));
-
+export const formatTreeClusters = (trees) => {
   return {
-    minLat: lat - latChange,
-    maxLat: lat + latChange,
-    minLon: lon - lonChange,
-    maxLon: lon + lonChange
+    type: 'FeatureCollection',
+    features: trees.map(tree => ({
+      type: 'Feature',
+      geometry: {
+        type: 'Point',
+        coordinates: [tree.longitude, tree.latitude]
+      },
+      properties: {
+        id: tree.id,
+        species: tree.species,
+        height: tree.height,
+        diameter: tree.diameter,
+        health: tree.health
+      }
+    }))
   };
 };
 
 /**
- * Check if a point is within the current viewport
- * @param {Array} point - [latitude, longitude]
- * @param {Object} bounds - Viewport bounds
- * @returns {boolean} Whether point is within bounds
+ * Calculate the grid size for density visualization based on zoom level
+ * @param {number} zoom Current map zoom level
+ * @returns {number} Grid size in kilometers
  */
-export const isPointInViewport = (point, bounds) => {
-  const [lat, lon] = point;
-  return lat >= bounds.minLat &&
-         lat <= bounds.maxLat &&
-         lon >= bounds.minLon &&
-         lon <= bounds.maxLon;
+export const calculateGridSize = (zoom) => {
+  const BASE_GRID_SIZE = 10; // 10km at zoom level 10
+  return BASE_GRID_SIZE * Math.pow(2, 10 - zoom);
+};
+
+/**
+ * Generate a legend configuration for the current visualization
+ * @param {Array} data Data array to generate legend for
+ * @param {string} type Type of legend ('density', 'species', etc.)
+ * @returns {Object} Legend configuration
+ */
+export const generateLegendConfig = (data, type) => {
+  switch (type) {
+    case 'density':
+      const [min, max] = extent(data);
+      const steps = 5;
+      const stepSize = (max - min) / steps;
+      
+      return {
+        title: 'Trees per km²',
+        steps: Array.from({ length: steps + 1 }, (_, i) => {
+          const value = min + (stepSize * i);
+          return {
+            value: Math.round(value),
+            color: createDensityColorScale(data)(value)
+          };
+        })
+      };
+      
+    case 'species':
+      return {
+        title: 'Tree Species',
+        categories: data.map(species => ({
+          label: species.name,
+          color: species.color
+        }))
+      };
+      
+    default:
+      return null;
+  }
+};
+
+/**
+ * Calculate the viewport padding based on screen size
+ * @param {Object} screen {width, height} Screen dimensions
+ * @returns {Object} Padding values for each side
+ */
+export const calculateViewportPadding = (screen) => {
+  const BASE_PADDING = 50;
+  const MOBILE_BREAKPOINT = 768;
+  
+  return {
+    top: screen.width < MOBILE_BREAKPOINT ? BASE_PADDING / 2 : BASE_PADDING,
+    right: screen.width < MOBILE_BREAKPOINT ? BASE_PADDING / 2 : BASE_PADDING,
+    bottom: screen.width < MOBILE_BREAKPOINT ? BASE_PADDING / 2 : BASE_PADDING,
+    left: screen.width < MOBILE_BREAKPOINT ? BASE_PADDING / 2 : BASE_PADDING
+  };
 };
