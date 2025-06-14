@@ -1,186 +1,252 @@
-"""Geospatial data service with optimized PostGIS queries and caching."""
-
 from typing import List, Dict, Optional, Tuple
-from datetime import datetime
-from sqlalchemy import create_engine, func
-from sqlalchemy.orm import sessionmaker
-from geoalchemy2.functions import ST_Contains, ST_Distance, ST_Transform
-from geoalchemy2.elements import WKTElement
-from redis import Redis
+from datetime import datetime, timedelta
 import json
-from ..models.geospatial import (
-    TreeLocation, TreeMeasurement, EnvironmentalImpact,
-    Region, ClimateZone, Base
-)
+from redis import Redis
+from sqlalchemy import text
+from sqlalchemy.sql.expression import func
+from geoalchemy2 import Geometry
+from geoalchemy2.functions import ST_AsGeoJSON, ST_Transform
+
+from src.models.geospatial import TreeLocation, TreeMeasurement, EnvironmentalImpact, Region, ClimateZone
+from src.config.settings import REDIS_HOST, REDIS_PORT, CACHE_TTL
 
 class GeospatialService:
-    """Service for handling geospatial data operations with caching."""
-
-    def __init__(self, db_url: str, redis_url: Optional[str] = None):
-        """Initialize service with database and cache connections."""
-        self.engine = create_engine(db_url)
-        Base.metadata.create_all(self.engine)
-        self.Session = sessionmaker(bind=self.engine)
-        
-        # Initialize Redis cache if URL provided
-        self.redis = Redis.from_url(redis_url) if redis_url else None
-        self.cache_ttl = 3600  # 1 hour default TTL
+    def __init__(self):
+        self.redis_client = Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
+        self.cache_ttl = CACHE_TTL
 
     def _get_cache_key(self, prefix: str, **kwargs) -> str:
-        """Generate cache key based on query parameters."""
-        key_parts = [prefix]
-        key_parts.extend(f"{k}:{v}" for k, v in sorted(kwargs.items()) if v is not None)
-        return "geo:" + ":".join(key_parts)
+        """Generate a cache key based on the prefix and parameters."""
+        sorted_params = sorted(kwargs.items())
+        params_str = '_'.join(f"{k}:{v}" for k, v in sorted_params)
+        return f"tree_dashboard:{prefix}:{params_str}"
 
-    def get_trees_in_region(self, 
-                           region_id: int,
-                           species: Optional[str] = None,
-                           limit: int = 1000,
-                           offset: int = 0) -> List[Dict]:
-        """Get trees within a region with pagination and caching."""
-        cache_key = self._get_cache_key('trees_region',
-                                      region_id=region_id,
-                                      species=species,
-                                      limit=limit,
-                                      offset=offset)
+    def _cache_data(self, key: str, data: dict) -> None:
+        """Cache data with the specified key."""
+        self.redis_client.setex(key, self.cache_ttl, json.dumps(data))
 
-        # Try cache first
-        if self.redis:
-            cached = self.redis.get(cache_key)
-            if cached:
-                return json.loads(cached)
+    def _get_cached_data(self, key: str) -> Optional[dict]:
+        """Retrieve cached data for the specified key."""
+        data = self.redis_client.get(key)
+        return json.loads(data) if data else None
 
-        session = self.Session()
-        try:
-            # Get region boundary
-            region = session.query(Region).get(region_id)
-            if not region:
-                return []
+    async def get_tree_clusters(self, bounds: Dict[str, float], zoom_level: int) -> List[Dict]:
+        """Get clustered tree locations within the specified bounds."""
+        cache_key = self._get_cache_key('tree_clusters', bounds=json.dumps(bounds), zoom=zoom_level)
+        cached_data = self._get_cached_data(cache_key)
+        if cached_data:
+            return cached_data
 
-            # Build query with spatial index
-            query = session.query(TreeLocation).filter(
-                ST_Contains(region.boundary, TreeLocation.location)
-            )
-
-            # Apply species filter if specified
-            if species:
-                query = query.filter(TreeLocation.species == species)
-
-            # Apply pagination
-            trees = query.limit(limit).offset(offset).all()
-            
-            # Convert to dictionary format
-            result = [{
-                'id': tree.id,
-                'species': tree.species,
-                'height': tree.height,
-                'diameter': tree.diameter,
-                'health_condition': tree.health_condition,
-                'coordinates': session.scalar(
-                    func.ST_AsGeoJSON(tree.location)
+        cluster_radius = self._get_cluster_radius(zoom_level)
+        query = text("""
+            WITH clusters AS (
+                SELECT 
+                    ST_ClusterDBSCAN(location, eps := :radius, minpoints := 2) over () as cluster_id,
+                    location,
+                    species,
+                    health_condition
+                FROM tree_locations
+                WHERE ST_Within(
+                    location,
+                    ST_MakeEnvelope(:min_lon, :min_lat, :max_lon, :max_lat, 4326)
                 )
-            } for tree in trees]
+            )
+            SELECT 
+                ST_AsGeoJSON(ST_Centroid(ST_Collect(location))) as centroid,
+                COUNT(*) as tree_count,
+                array_agg(DISTINCT species) as species_list,
+                array_agg(DISTINCT health_condition) as health_conditions
+            FROM clusters
+            GROUP BY cluster_id;
+        """)
 
-            # Cache the results
-            if self.redis:
-                self.redis.setex(cache_key, self.cache_ttl, json.dumps(result))
+        result = await self._execute_query(query, {
+            'radius': cluster_radius,
+            'min_lon': bounds['min_lon'],
+            'min_lat': bounds['min_lat'],
+            'max_lon': bounds['max_lon'],
+            'max_lat': bounds['max_lat']
+        })
 
-            return result
-        finally:
-            session.close()
+        clusters = self._process_cluster_results(result)
+        self._cache_data(cache_key, clusters)
+        return clusters
 
-    def get_environmental_impact_by_region(self,
-                                         region_id: int,
-                                         start_date: Optional[datetime] = None,
-                                         end_date: Optional[datetime] = None) -> Dict:
-        """Calculate aggregated environmental impact for a region."""
-        cache_key = self._get_cache_key('env_impact',
+    async def get_tree_density(self, region_id: Optional[int] = None) -> List[Dict]:
+        """Get tree density statistics by region."""
+        cache_key = self._get_cache_key('tree_density', region_id=region_id)
+        cached_data = self._get_cached_data(cache_key)
+        if cached_data:
+            return cached_data
+
+        query = text("""
+            SELECT * FROM tree_density_by_region
+            WHERE (:region_id IS NULL OR region_id = :region_id)
+            ORDER BY trees_per_km2 DESC;
+        """)
+
+        result = await self._execute_query(query, {'region_id': region_id})
+        density_data = self._process_density_results(result)
+        self._cache_data(cache_key, density_data)
+        return density_data
+
+    async def get_environmental_impact(self, region_id: Optional[int] = None, 
+                                     start_date: Optional[datetime] = None,
+                                     end_date: Optional[datetime] = None) -> Dict:
+        """Calculate environmental impact metrics for trees in a region."""
+        cache_key = self._get_cache_key('environmental_impact', 
                                       region_id=region_id,
                                       start_date=start_date.isoformat() if start_date else None,
                                       end_date=end_date.isoformat() if end_date else None)
+        cached_data = self._get_cached_data(cache_key)
+        if cached_data:
+            return cached_data
 
-        # Try cache first
-        if self.redis:
-            cached = self.redis.get(cache_key)
-            if cached:
-                return json.loads(cached)
-
-        session = self.Session()
-        try:
-            # Get region boundary
-            region = session.query(Region).get(region_id)
-            if not region:
-                return {}
-
-            # Build base query with spatial join
-            query = session.query(
-                func.sum(EnvironmentalImpact.co2_absorption).label('total_co2'),
-                func.sum(EnvironmentalImpact.oxygen_production).label('total_oxygen'),
-                func.sum(EnvironmentalImpact.water_filtration).label('total_water'),
-                func.sum(EnvironmentalImpact.energy_savings).label('total_energy')
-            ).join(TreeLocation).filter(
-                ST_Contains(region.boundary, TreeLocation.location)
+        query = text("""
+            WITH tree_impacts AS (
+                SELECT 
+                    ei.co2_absorption,
+                    ei.oxygen_production,
+                    ei.water_filtration,
+                    t.species,
+                    t.health_condition
+                FROM environmental_impacts ei
+                JOIN tree_locations t ON ei.tree_id = t.id
+                WHERE 
+                    (:region_id IS NULL OR 
+                     ST_Contains((SELECT boundary FROM regions WHERE id = :region_id), t.location))
+                    AND (:start_date IS NULL OR ei.calculation_date >= :start_date)
+                    AND (:end_date IS NULL OR ei.calculation_date <= :end_date)
             )
+            SELECT 
+                SUM(co2_absorption) as total_co2_absorbed,
+                SUM(oxygen_production) as total_oxygen_produced,
+                SUM(water_filtration) as total_water_filtered,
+                COUNT(DISTINCT species) as unique_species,
+                json_object_agg(health_condition, COUNT(*)) as health_distribution
+            FROM tree_impacts;
+        """)
 
-            # Apply date filters
-            if start_date:
-                query = query.filter(EnvironmentalImpact.calculation_date >= start_date)
-            if end_date:
-                query = query.filter(EnvironmentalImpact.calculation_date <= end_date)
+        result = await self._execute_query(query, {
+            'region_id': region_id,
+            'start_date': start_date,
+            'end_date': end_date or datetime.now()
+        })
 
-            result = query.first()
-            
-            impact_data = {
-                'total_co2_absorption': float(result.total_co2 or 0),
-                'total_oxygen_production': float(result.total_oxygen or 0),
-                'total_water_filtration': float(result.total_water or 0),
-                'total_energy_savings': float(result.total_energy or 0)
-            }
+        impact_data = self._process_impact_results(result)
+        self._cache_data(cache_key, impact_data)
+        return impact_data
 
-            # Cache the results
-            if self.redis:
-                self.redis.setex(cache_key, self.cache_ttl, json.dumps(impact_data))
+    async def get_historical_trends(self, metric: str, 
+                                  interval: str = 'month',
+                                  start_date: Optional[datetime] = None,
+                                  end_date: Optional[datetime] = None) -> List[Dict]:
+        """Get historical trends for specified metrics."""
+        cache_key = self._get_cache_key('historical_trends',
+                                      metric=metric,
+                                      interval=interval,
+                                      start_date=start_date.isoformat() if start_date else None,
+                                      end_date=end_date.isoformat() if end_date else None)
+        cached_data = self._get_cached_data(cache_key)
+        if cached_data:
+            return cached_data
 
-            return impact_data
-        finally:
-            session.close()
+        interval_sql = self._get_interval_sql(interval)
+        query = text(f"""
+            WITH time_series AS (
+                SELECT 
+                    date_trunc(:interval, measurement_date) as period,
+                    AVG(CASE 
+                        WHEN :metric = 'height' THEN height
+                        WHEN :metric = 'diameter' THEN diameter
+                        WHEN :metric = 'canopy_width' THEN canopy_width
+                    END) as avg_value,
+                    COUNT(*) as measurement_count
+                FROM tree_measurements
+                WHERE 
+                    measurement_date >= :start_date
+                    AND measurement_date <= :end_date
+                GROUP BY period
+                ORDER BY period
+            )
+            SELECT 
+                period,
+                avg_value,
+                measurement_count,
+                LAG(avg_value) OVER (ORDER BY period) as prev_value
+            FROM time_series;
+        """)
 
-    def get_tree_density_by_climate_zone(self) -> List[Dict]:
-        """Calculate tree density for each climate zone."""
-        cache_key = self._get_cache_key('tree_density_climate')
+        result = await self._execute_query(query, {
+            'interval': interval,
+            'metric': metric,
+            'start_date': start_date or datetime.now() - timedelta(days=365),
+            'end_date': end_date or datetime.now()
+        })
 
-        # Try cache first
-        if self.redis:
-            cached = self.redis.get(cache_key)
-            if cached:
-                return json.loads(cached)
+        trend_data = self._process_trend_results(result)
+        self._cache_data(cache_key, trend_data)
+        return trend_data
 
-        session = self.Session()
-        try:
-            # Calculate tree density using PostGIS
-            query = session.query(
-                ClimateZone.zone_name,
-                ClimateZone.temperature_range,
-                func.count(TreeLocation.id).label('tree_count'),
-                func.ST_Area(func.ST_Transform(ClimateZone.boundary, 3857)).label('area_m2')
-            ).outerjoin(
-                TreeLocation,
-                ST_Contains(ClimateZone.boundary, TreeLocation.location)
-            ).group_by(ClimateZone.id)
+    def _get_cluster_radius(self, zoom_level: int) -> float:
+        """Calculate clustering radius based on zoom level."""
+        base_radius = 0.1  # degrees
+        return base_radius * (2 ** (15 - zoom_level))
 
-            results = query.all()
-            
-            density_data = [{
-                'zone_name': result.zone_name,
-                'temperature_range': result.temperature_range,
-                'tree_count': result.tree_count,
-                'density_per_km2': result.tree_count / (result.area_m2 / 1000000)
-            } for result in results]
+    def _get_interval_sql(self, interval: str) -> str:
+        """Get SQL interval string based on specified interval."""
+        intervals = {
+            'day': 'day',
+            'week': 'week',
+            'month': 'month',
+            'quarter': 'quarter',
+            'year': 'year'
+        }
+        return intervals.get(interval.lower(), 'month')
 
-            # Cache the results
-            if self.redis:
-                self.redis.setex(cache_key, self.cache_ttl, json.dumps(density_data))
+    async def _execute_query(self, query: text, params: Dict) -> List[Dict]:
+        """Execute SQL query with parameters."""
+        # Implementation depends on your database connection setup
+        pass
 
-            return density_data
-        finally:
-            session.close()
+    def _process_cluster_results(self, results: List[Dict]) -> List[Dict]:
+        """Process raw cluster query results into formatted response."""
+        return [{
+            'centroid': json.loads(row['centroid']),
+            'tree_count': row['tree_count'],
+            'species': row['species_list'],
+            'health_conditions': row['health_conditions']
+        } for row in results]
+
+    def _process_density_results(self, results: List[Dict]) -> List[Dict]:
+        """Process raw density query results into formatted response."""
+        return [{
+            'region_id': row['region_id'],
+            'region_name': row['region_name'],
+            'tree_count': row['tree_count'],
+            'area_km2': float(row['area_km2']),
+            'trees_per_km2': float(row['trees_per_km2'])
+        } for row in results]
+
+    def _process_impact_results(self, results: List[Dict]) -> Dict:
+        """Process raw environmental impact results into formatted response."""
+        row = results[0] if results else {}
+        return {
+            'total_co2_absorbed': float(row.get('total_co2_absorbed', 0)),
+            'total_oxygen_produced': float(row.get('total_oxygen_produced', 0)),
+            'total_water_filtered': float(row.get('total_water_filtered', 0)),
+            'unique_species': int(row.get('unique_species', 0)),
+            'health_distribution': json.loads(row.get('health_distribution', '{}'))
+        }
+
+    def _process_trend_results(self, results: List[Dict]) -> List[Dict]:
+        """Process raw trend query results into formatted response."""
+        return [{
+            'period': row['period'].isoformat(),
+            'value': float(row['avg_value']),
+            'count': int(row['measurement_count']),
+            'change_percent': (
+                ((float(row['avg_value']) - float(row['prev_value'])) / float(row['prev_value']) * 100)
+                if row['prev_value'] is not None else 0
+            )
+        } for row in results]
