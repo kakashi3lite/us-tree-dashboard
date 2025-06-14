@@ -1,155 +1,185 @@
-from flask import Blueprint, jsonify, request, current_app
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
-from datetime import datetime
-from typing import Optional, Dict, Any
-
+from flask import Blueprint, request, jsonify
 from src.services.geospatial_service import GeospatialService
-from src.error_handlers import APIError, handle_api_error
+from src.services.environmental_service import EnvironmentalService
+from src.utils.validators import validate_bbox, validate_coordinates
+from src.utils.rate_limiter import rate_limit
+from src.monitoring.logger import logger
+from datetime import datetime
 
 api = Blueprint('api', __name__)
-limiter = Limiter(
-    key_func=get_remote_address,
-    default_limits=["200 per day", "50 per hour"]
-)
-
 geospatial_service = GeospatialService()
+environmental_service = EnvironmentalService()
 
-@api.errorhandler(APIError)
-def handle_error(error):
-    return handle_api_error(error)
-
-@api.route('/health')
-def health_check():
-    """Health check endpoint for monitoring."""
-    return jsonify({'status': 'healthy', 'timestamp': datetime.utcnow().isoformat()})
-
-@api.route('/tree-clusters')
-@limiter.limit("30 per minute")
-async def get_tree_clusters():
-    """Get clustered tree locations within specified bounds."""
+@api.route('/trees/radius', methods=['GET'])
+@rate_limit(limit=100, per=60)  # 100 requests per minute
+def get_trees_in_radius():
     try:
-        bounds = _parse_bounds_params(request.args)
-        zoom_level = int(request.args.get('zoom', 12))
-        
-        clusters = await geospatial_service.get_tree_clusters(bounds, zoom_level)
-        return jsonify({
-            'status': 'success',
-            'data': clusters
-        })
+        lat = float(request.args.get('lat'))
+        lon = float(request.args.get('lon'))
+        radius = float(request.args.get('radius', 1.0))  # Default 1km radius
+
+        if not validate_coordinates(lat, lon):
+            return jsonify({'error': 'Invalid coordinates'}), 400
+
+        trees = geospatial_service.get_trees_in_radius(lat, lon, radius)
+        return jsonify(trees)
+
+    except ValueError as e:
+        logger.error(f'Invalid parameters for trees in radius: {str(e)}')
+        return jsonify({'error': 'Invalid parameters'}), 400
     except Exception as e:
-        current_app.logger.error(f"Error fetching tree clusters: {str(e)}")
-        raise APIError(str(e))
+        logger.error(f'Error getting trees in radius: {str(e)}')
+        return jsonify({'error': 'Internal server error'}), 500
 
-@api.route('/tree-density')
-@limiter.limit("60 per minute")
-async def get_tree_density():
-    """Get tree density statistics by region."""
+@api.route('/trees/species-distribution', methods=['GET'])
+@rate_limit(limit=60, per=60)  # 60 requests per minute
+def get_species_distribution():
     try:
-        region_id = request.args.get('region_id', type=int)
-        density_data = await geospatial_service.get_tree_density(region_id)
-        return jsonify({
-            'status': 'success',
-            'data': density_data
-        })
+        bbox = request.args.get('bbox')
+        if not bbox or not validate_bbox(bbox):
+            return jsonify({'error': 'Invalid bounding box'}), 400
+
+        bbox = [float(x) for x in bbox.split(',')]
+        distribution = geospatial_service.get_species_distribution(bbox)
+        return jsonify(distribution)
+
+    except ValueError as e:
+        logger.error(f'Invalid parameters for species distribution: {str(e)}')
+        return jsonify({'error': 'Invalid parameters'}), 400
     except Exception as e:
-        current_app.logger.error(f"Error fetching tree density: {str(e)}")
-        raise APIError(str(e))
+        logger.error(f'Error getting species distribution: {str(e)}')
+        return jsonify({'error': 'Internal server error'}), 500
 
-@api.route('/environmental-impact')
-@limiter.limit("60 per minute")
-async def get_environmental_impact():
-    """Calculate environmental impact metrics."""
+@api.route('/trees/density-heatmap', methods=['GET'])
+@rate_limit(limit=60, per=60)  # 60 requests per minute
+def get_tree_density_heatmap():
     try:
-        params = _parse_impact_params(request.args)
-        impact_data = await geospatial_service.get_environmental_impact(**params)
-        return jsonify({
-            'status': 'success',
-            'data': impact_data
-        })
+        bbox = request.args.get('bbox')
+        if not bbox or not validate_bbox(bbox):
+            return jsonify({'error': 'Invalid bounding box'}), 400
+
+        bbox = [float(x) for x in bbox.split(',')]
+        heatmap = geospatial_service.get_tree_density_heatmap(bbox)
+        return jsonify(heatmap)
+
+    except ValueError as e:
+        logger.error(f'Invalid parameters for density heatmap: {str(e)}')
+        return jsonify({'error': 'Invalid parameters'}), 400
     except Exception as e:
-        current_app.logger.error(f"Error calculating environmental impact: {str(e)}")
-        raise APIError(str(e))
+        logger.error(f'Error getting density heatmap: {str(e)}')
+        return jsonify({'error': 'Internal server error'}), 500
 
-@api.route('/historical-trends')
-@limiter.limit("60 per minute")
-async def get_historical_trends():
-    """Get historical trends for specified metrics."""
+@api.route('/predictions/species-distribution', methods=['GET'])
+@rate_limit(limit=30, per=60)  # 30 requests per minute due to computational intensity
+def get_predicted_species_distribution():
     try:
-        params = _parse_trend_params(request.args)
-        trend_data = await geospatial_service.get_historical_trends(**params)
-        return jsonify({
-            'status': 'success',
-            'data': trend_data
-        })
+        bbox = request.args.get('bbox')
+        climate_scenario = request.args.get('climate_scenario', 'rcp45')  # Default scenario
+
+        if not bbox or not validate_bbox(bbox):
+            return jsonify({'error': 'Invalid bounding box'}), 400
+
+        bbox = [float(x) for x in bbox.split(',')]
+        predictions = geospatial_service.get_predicted_species_distribution(bbox, climate_scenario)
+        return jsonify(predictions)
+
+    except ValueError as e:
+        logger.error(f'Invalid parameters for predicted species distribution: {str(e)}')
+        return jsonify({'error': 'Invalid parameters'}), 400
     except Exception as e:
-        current_app.logger.error(f"Error fetching historical trends: {str(e)}")
-        raise APIError(str(e))
+        logger.error(f'Error getting predicted species distribution: {str(e)}')
+        return jsonify({'error': 'Internal server error'}), 500
 
-def _parse_bounds_params(args) -> Dict[str, float]:
-    """Parse and validate bounds parameters from request."""
+@api.route('/analysis/climate-impact', methods=['GET'])
+@rate_limit(limit=30, per=60)  # 30 requests per minute
+def get_climate_impact_analysis():
     try:
-        return {
-            'min_lat': float(args.get('min_lat')),
-            'max_lat': float(args.get('max_lat')),
-            'min_lon': float(args.get('min_lon')),
-            'max_lon': float(args.get('max_lon'))
-        }
-    except (TypeError, ValueError) as e:
-        raise APIError(f"Invalid bounds parameters: {str(e)}")
+        bbox = request.args.get('bbox')
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
 
-def _parse_impact_params(args) -> Dict[str, Any]:
-    """Parse and validate environmental impact parameters."""
-    params = {}
-    
-    if 'region_id' in args:
-        try:
-            params['region_id'] = int(args['region_id'])
-        except ValueError:
-            raise APIError("Invalid region_id parameter")
-    
-    if 'start_date' in args:
-        try:
-            params['start_date'] = datetime.fromisoformat(args['start_date'])
-        except ValueError:
-            raise APIError("Invalid start_date format. Use ISO format (YYYY-MM-DD)")
-    
-    if 'end_date' in args:
-        try:
-            params['end_date'] = datetime.fromisoformat(args['end_date'])
-        except ValueError:
-            raise APIError("Invalid end_date format. Use ISO format (YYYY-MM-DD)")
-    
-    return params
+        if not bbox or not validate_bbox(bbox):
+            return jsonify({'error': 'Invalid bounding box'}), 400
 
-def _parse_trend_params(args) -> Dict[str, Any]:
-    """Parse and validate historical trends parameters."""
-    valid_metrics = {'height', 'diameter', 'canopy_width'}
-    valid_intervals = {'day', 'week', 'month', 'quarter', 'year'}
-    
-    metric = args.get('metric')
-    if not metric or metric not in valid_metrics:
-        raise APIError(f"Invalid metric. Must be one of: {', '.join(valid_metrics)}")
-    
-    interval = args.get('interval', 'month')
-    if interval not in valid_intervals:
-        raise APIError(f"Invalid interval. Must be one of: {', '.join(valid_intervals)}")
-    
-    params = {
-        'metric': metric,
-        'interval': interval
-    }
-    
-    if 'start_date' in args:
         try:
-            params['start_date'] = datetime.fromisoformat(args['start_date'])
-        except ValueError:
-            raise APIError("Invalid start_date format. Use ISO format (YYYY-MM-DD)")
-    
-    if 'end_date' in args:
+            start_date = datetime.strptime(start_date, '%Y-%m-%d')
+            end_date = datetime.strptime(end_date, '%Y-%m-%d')
+        except (ValueError, TypeError):
+            return jsonify({'error': 'Invalid date format'}), 400
+
+        bbox = [float(x) for x in bbox.split(',')]
+        analysis = environmental_service.get_climate_impact_analysis(bbox, start_date, end_date)
+        return jsonify(analysis)
+
+    except ValueError as e:
+        logger.error(f'Invalid parameters for climate impact analysis: {str(e)}')
+        return jsonify({'error': 'Invalid parameters'}), 400
+    except Exception as e:
+        logger.error(f'Error getting climate impact analysis: {str(e)}')
+        return jsonify({'error': 'Internal server error'}), 500
+
+@api.route('/environmental/impact', methods=['GET'])
+@rate_limit(limit=60, per=60)  # 60 requests per minute
+def get_environmental_impact():
+    try:
+        bbox = request.args.get('bbox')
+        if not bbox or not validate_bbox(bbox):
+            return jsonify({'error': 'Invalid bounding box'}), 400
+
+        bbox = [float(x) for x in bbox.split(',')]
+        impact = environmental_service.get_environmental_impact(bbox)
+        return jsonify(impact)
+
+    except ValueError as e:
+        logger.error(f'Invalid parameters for environmental impact: {str(e)}')
+        return jsonify({'error': 'Invalid parameters'}), 400
+    except Exception as e:
+        logger.error(f'Error getting environmental impact: {str(e)}')
+        return jsonify({'error': 'Internal server error'}), 500
+
+@api.route('/environmental/historical-trends', methods=['GET'])
+@rate_limit(limit=30, per=60)  # 30 requests per minute
+def get_historical_trends():
+    try:
+        bbox = request.args.get('bbox')
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+
+        if not bbox or not validate_bbox(bbox):
+            return jsonify({'error': 'Invalid bounding box'}), 400
+
         try:
-            params['end_date'] = datetime.fromisoformat(args['end_date'])
-        except ValueError:
-            raise APIError("Invalid end_date format. Use ISO format (YYYY-MM-DD)")
-    
-    return params
+            start_date = datetime.strptime(start_date, '%Y-%m-%d')
+            end_date = datetime.strptime(end_date, '%Y-%m-%d')
+        except (ValueError, TypeError):
+            return jsonify({'error': 'Invalid date format'}), 400
+
+        bbox = [float(x) for x in bbox.split(',')]
+        trends = environmental_service.get_historical_trends(bbox, start_date, end_date)
+        return jsonify(trends)
+
+    except ValueError as e:
+        logger.error(f'Invalid parameters for historical trends: {str(e)}')
+        return jsonify({'error': 'Invalid parameters'}), 400
+    except Exception as e:
+        logger.error(f'Error getting historical trends: {str(e)}')
+        return jsonify({'error': 'Internal server error'}), 500
+
+@api.route('/environmental/climate-scenarios', methods=['GET'])
+@rate_limit(limit=30, per=60)  # 30 requests per minute
+def get_climate_scenarios():
+    try:
+        bbox = request.args.get('bbox')
+        if not bbox or not validate_bbox(bbox):
+            return jsonify({'error': 'Invalid bounding box'}), 400
+
+        bbox = [float(x) for x in bbox.split(',')]
+        scenarios = environmental_service.get_climate_scenarios(bbox)
+        return jsonify(scenarios)
+
+    except ValueError as e:
+        logger.error(f'Invalid parameters for climate scenarios: {str(e)}')
+        return jsonify({'error': 'Invalid parameters'}), 400
+    except Exception as e:
+        logger.error(f'Error getting climate scenarios: {str(e)}')
+        return jsonify({'error': 'Internal server error'}), 500

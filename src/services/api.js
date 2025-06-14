@@ -1,18 +1,14 @@
 import axios from 'axios';
-import { handleApiError } from '../utils/errorHandlers';
+import { handleError } from '../utils/errorHandling';
 
-const api = axios.create({
-  baseURL: process.env.REACT_APP_API_URL || 'http://localhost:8050/api',
-  timeout: 10000,
-  headers: {
-    'Content-Type': 'application/json'
-  }
-});
+// Configure axios defaults
+axios.defaults.baseURL = process.env.REACT_APP_API_URL || '';
+axios.defaults.timeout = 30000; // 30 seconds
 
-// Request interceptor for API calls
-api.interceptors.request.use(
-  async config => {
-    // Add any request preprocessing here (e.g., auth tokens)
+// Add request interceptor for authentication
+axios.interceptors.request.use(
+  config => {
+    // Add any auth tokens or headers here
     return config;
   },
   error => {
@@ -20,50 +16,89 @@ api.interceptors.request.use(
   }
 );
 
-// Response interceptor for API calls
-api.interceptors.response.use(
-  response => response.data,
-  error => handleApiError(error)
+// Add response interceptor for error handling
+axios.interceptors.response.use(
+  response => response,
+  error => {
+    handleError(error);
+    return Promise.reject(error);
+  }
 );
 
-export const fetchTreeClusters = async (bounds, zoom) => {
+// Tree-related API calls
+export const getTreesInRadius = async (lat, lon, radius) => {
   try {
-    const response = await api.get('/tree-clusters', {
-      params: {
-        min_lat: bounds.minLat,
-        max_lat: bounds.maxLat,
-        min_lon: bounds.minLon,
-        max_lon: bounds.maxLon,
-        zoom
-      }
+    const response = await axios.get('/api/trees/radius', {
+      params: { lat, lon, radius }
     });
     return response.data;
   } catch (error) {
-    console.error('Error fetching tree clusters:', error);
+    console.error('Error fetching trees in radius:', error);
     throw error;
   }
 };
 
-export const fetchTreeDensity = async (regionId = null) => {
+export const getSpeciesDistribution = async (bbox) => {
   try {
-    const response = await api.get('/tree-density', {
-      params: { region_id: regionId }
+    const response = await axios.get('/api/trees/species-distribution', {
+      params: { bbox: bbox.join(',') }
     });
     return response.data;
   } catch (error) {
-    console.error('Error fetching tree density:', error);
+    console.error('Error fetching species distribution:', error);
     throw error;
   }
 };
 
-export const fetchEnvironmentalImpact = async (regionId = null, startDate = null, endDate = null) => {
+export const getTreeDensityHeatmap = async (bbox) => {
   try {
-    const response = await api.get('/environmental-impact', {
+    const response = await axios.get('/api/trees/density-heatmap', {
+      params: { bbox: bbox.join(',') }
+    });
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching tree density heatmap:', error);
+    throw error;
+  }
+};
+
+// Prediction-related API calls
+export const getPredictedSpeciesDistribution = async (bbox, climateScenario) => {
+  try {
+    const response = await axios.get('/api/predictions/species-distribution', {
       params: {
-        region_id: regionId,
-        start_date: startDate?.toISOString().split('T')[0],
-        end_date: endDate?.toISOString().split('T')[0]
+        bbox: bbox.join(','),
+        climate_scenario: climateScenario
       }
+    });
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching predicted species distribution:', error);
+    throw error;
+  }
+};
+
+// Environmental analysis API calls
+export const getClimateImpactAnalysis = async (bbox, timeRange) => {
+  try {
+    const response = await axios.get('/api/analysis/climate-impact', {
+      params: {
+        bbox: bbox.join(','),
+        start_date: timeRange.start,
+        end_date: timeRange.end
+      }
+    });
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching climate impact analysis:', error);
+    throw error;
+  }
+};
+
+export const getEnvironmentalImpact = async (bbox) => {
+  try {
+    const response = await axios.get('/api/environmental/impact', {
+      params: { bbox: bbox.join(',') }
     });
     return response.data;
   } catch (error) {
@@ -72,19 +107,13 @@ export const fetchEnvironmentalImpact = async (regionId = null, startDate = null
   }
 };
 
-export const fetchHistoricalTrends = async (
-  metric,
-  interval = 'month',
-  startDate = null,
-  endDate = null
-) => {
+export const getHistoricalTrends = async (bbox, timeRange) => {
   try {
-    const response = await api.get('/historical-trends', {
+    const response = await axios.get('/api/environmental/historical-trends', {
       params: {
-        metric,
-        interval,
-        start_date: startDate?.toISOString().split('T')[0],
-        end_date: endDate?.toISOString().split('T')[0]
+        bbox: bbox.join(','),
+        start_date: timeRange.start,
+        end_date: timeRange.end
       }
     });
     return response.data;
@@ -94,15 +123,14 @@ export const fetchHistoricalTrends = async (
   }
 };
 
-export const retryFailedRequest = async (failedRequest, maxRetries = 3) => {
-  let retries = 0;
-  while (retries < maxRetries) {
-    try {
-      return await failedRequest();
-    } catch (error) {
-      retries++;
-      if (retries === maxRetries) throw error;
-      await new Promise(resolve => setTimeout(resolve, 1000 * retries));
-    }
+export const getClimateScenarios = async (bbox) => {
+  try {
+    const response = await axios.get('/api/environmental/climate-scenarios', {
+      params: { bbox: bbox.join(',') }
+    });
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching climate scenarios:', error);
+    throw error;
   }
 };
