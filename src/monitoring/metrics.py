@@ -1,162 +1,280 @@
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, Any, List, Optional
-from prometheus_client import Counter, Histogram, Gauge
-import json
-import os
+from typing import Dict, List, Optional
+from prometheus_client import Counter, Histogram, Gauge, Summary
+from src.monitoring.logger import logger
+
+# Request metrics
+HTTP_REQUEST_TOTAL = Counter(
+    'http_request_total',
+    'Total number of HTTP requests',
+    ['method', 'endpoint', 'status']
+)
+
+HTTP_REQUEST_DURATION = Histogram(
+    'http_request_duration_seconds',
+    'HTTP request duration in seconds',
+    ['method', 'endpoint'],
+    buckets=[0.1, 0.5, 1.0, 2.0, 5.0, 10.0]
+)
+
+# Cache metrics
+CACHE_HITS = Counter(
+    'cache_hits_total',
+    'Total number of cache hits',
+    ['cache_type']
+)
+
+CACHE_MISSES = Counter(
+    'cache_misses_total',
+    'Total number of cache misses',
+    ['cache_type']
+)
+
+# Database metrics
+DB_QUERY_DURATION = Histogram(
+    'db_query_duration_seconds',
+    'Database query duration in seconds',
+    ['query_type'],
+    buckets=[0.01, 0.05, 0.1, 0.5, 1.0, 5.0]
+)
+
+ACTIVE_DB_CONNECTIONS = Gauge(
+    'active_db_connections',
+    'Number of active database connections'
+)
+
+# Geospatial metrics
+GEOSPATIAL_QUERY_DURATION = Histogram(
+    'geospatial_query_duration_seconds',
+    'Geospatial query duration in seconds',
+    ['operation_type'],
+    buckets=[0.1, 0.5, 1.0, 2.0, 5.0, 10.0]
+)
+
+GEOSPATIAL_RESULT_COUNT = Summary(
+    'geospatial_result_count',
+    'Number of results returned by geospatial queries',
+    ['operation_type']
+)
+
+# ML metrics
+ML_PREDICTION_DURATION = Histogram(
+    'ml_prediction_duration_seconds',
+    'Machine learning prediction duration in seconds',
+    ['model_type'],
+    buckets=[0.1, 0.5, 1.0, 2.0, 5.0, 10.0]
+)
+
+ML_PREDICTION_ERROR = Counter(
+    'ml_prediction_error_total',
+    'Total number of ML prediction errors',
+    ['model_type', 'error_type']
+)
 
 @dataclass
-class MetricsConfig:
-    app_name: str
-    environment: str
-    enable_prometheus: bool = True
+class RequestMetrics:
+    start_time: datetime
+    method: str
+    endpoint: str
+    status_code: Optional[int] = None
+    error: Optional[str] = None
 
-class MetricsCollector:
-    def __init__(self, config: MetricsConfig):
-        self.config = config
-        self.metrics_file = os.path.join(
-            os.path.dirname(os.path.dirname(__file__)),
-            'logs',
-            'metrics.json'
+    def record(self):
+        duration = (datetime.now() - self.start_time).total_seconds()
+
+        # Record request count
+        HTTP_REQUEST_TOTAL.labels(
+            method=self.method,
+            endpoint=self.endpoint,
+            status=self.status_code or 500
+        ).inc()
+
+        # Record request duration
+        HTTP_REQUEST_DURATION.labels(
+            method=self.method,
+            endpoint=self.endpoint
+        ).observe(duration)
+
+        # Log metrics
+        logger.info(
+            'Request Metrics',
+            extra={
+                'metric_type': 'request',
+                'method': self.method,
+                'endpoint': self.endpoint,
+                'status_code': self.status_code,
+                'duration': duration,
+                'error': self.error
+            }
         )
 
-        # Prometheus metrics
-        if self.config.enable_prometheus:
-            self._setup_prometheus_metrics()
+class DatabaseMetrics:
+    @staticmethod
+    def record_query(query_type: str, duration: float):
+        DB_QUERY_DURATION.labels(query_type=query_type).observe(duration)
 
-    def _setup_prometheus_metrics(self) -> None:
-        """Initialize Prometheus metrics."""
-        self.api_requests = Counter(
-            'api_requests_total',
-            'Total API requests',
-            ['endpoint', 'method', 'status']
+    @staticmethod
+    def update_connections(count: int):
+        ACTIVE_DB_CONNECTIONS.set(count)
+
+    @staticmethod
+    def log_slow_query(query_type: str, duration: float, query: str):
+        if duration > 1.0:  # Log queries taking more than 1 second
+            logger.warning(
+                'Slow Query Detected',
+                extra={
+                    'metric_type': 'database',
+                    'query_type': query_type,
+                    'duration': duration,
+                    'query': query
+                }
+            )
+
+class GeospatialMetrics:
+    @staticmethod
+    def record_query(operation_type: str, duration: float, result_count: int):
+        GEOSPATIAL_QUERY_DURATION.labels(
+            operation_type=operation_type
+        ).observe(duration)
+
+        GEOSPATIAL_RESULT_COUNT.labels(
+            operation_type=operation_type
+        ).observe(result_count)
+
+        logger.info(
+            'Geospatial Query Metrics',
+            extra={
+                'metric_type': 'geospatial',
+                'operation_type': operation_type,
+                'duration': duration,
+                'result_count': result_count
+            }
         )
 
-        self.request_duration = Histogram(
-            'request_duration_seconds',
-            'Request duration in seconds',
-            ['endpoint']
+class MLMetrics:
+    @staticmethod
+    def record_prediction(model_type: str, duration: float, error: Optional[str] = None):
+        ML_PREDICTION_DURATION.labels(model_type=model_type).observe(duration)
+
+        if error:
+            ML_PREDICTION_ERROR.labels(
+                model_type=model_type,
+                error_type=type(error).__name__
+            ).inc()
+
+            logger.error(
+                'ML Prediction Error',
+                extra={
+                    'metric_type': 'ml',
+                    'model_type': model_type,
+                    'error': str(error),
+                    'duration': duration
+                }
+            )
+        else:
+            logger.info(
+                'ML Prediction Success',
+                extra={
+                    'metric_type': 'ml',
+                    'model_type': model_type,
+                    'duration': duration
+                }
+            )
+
+class CacheMetrics:
+    @staticmethod
+    def record_cache_hit(cache_type: str):
+        CACHE_HITS.labels(cache_type=cache_type).inc()
+
+    @staticmethod
+    def record_cache_miss(cache_type: str):
+        CACHE_MISSES.labels(cache_type=cache_type).inc()
+
+    @staticmethod
+    def log_cache_stats(cache_type: str, hit_rate: float):
+        logger.info(
+            'Cache Statistics',
+            extra={
+                'metric_type': 'cache',
+                'cache_type': cache_type,
+                'hit_rate': hit_rate
+            }
         )
 
-        self.active_users = Gauge(
-            'active_users',
-            'Number of active users'
-        )
-
-        self.query_duration = Histogram(
-            'query_duration_seconds',
-            'Database query duration in seconds',
-            ['query_type']
-        )
-
-        self.cache_hits = Counter(
-            'cache_hits_total',
-            'Total cache hits',
-            ['cache_type']
-        )
-
-        self.cache_misses = Counter(
-            'cache_misses_total',
-            'Total cache misses',
-            ['cache_type']
-        )
-
-    def record_api_request(self, endpoint: str, method: str, status: str, duration: float) -> None:
-        """Record API request metrics."""
-        if self.config.enable_prometheus:
-            self.api_requests.labels(endpoint=endpoint, method=method, status=status).inc()
-            self.request_duration.labels(endpoint=endpoint).observe(duration)
-
-        self._save_metric({
-            'type': 'api_request',
-            'endpoint': endpoint,
-            'method': method,
-            'status': status,
-            'duration': duration,
-            'timestamp': datetime.utcnow().isoformat()
-        })
-
-    def record_query_performance(self, query_type: str, duration: float) -> None:
-        """Record database query performance metrics."""
-        if self.config.enable_prometheus:
-            self.query_duration.labels(query_type=query_type).observe(duration)
-
-        self._save_metric({
-            'type': 'query_performance',
-            'query_type': query_type,
-            'duration': duration,
-            'timestamp': datetime.utcnow().isoformat()
-        })
-
-    def record_cache_operation(self, cache_type: str, hit: bool) -> None:
-        """Record cache operation metrics."""
-        if self.config.enable_prometheus:
-            if hit:
-                self.cache_hits.labels(cache_type=cache_type).inc()
-            else:
-                self.cache_misses.labels(cache_type=cache_type).inc()
-
-        self._save_metric({
-            'type': 'cache_operation',
-            'cache_type': cache_type,
-            'hit': hit,
-            'timestamp': datetime.utcnow().isoformat()
-        })
-
-    def update_active_users(self, count: int) -> None:
-        """Update active users count."""
-        if self.config.enable_prometheus:
-            self.active_users.set(count)
-
-        self._save_metric({
-            'type': 'active_users',
-            'count': count,
-            'timestamp': datetime.utcnow().isoformat()
-        })
-
-    def _save_metric(self, metric: Dict[str, Any]) -> None:
-        """Save metric to JSON file."""
-        try:
-            metrics = self._load_metrics()
-            metrics.append(metric)
-            
-            # Keep only last 1000 metrics
-            if len(metrics) > 1000:
-                metrics = metrics[-1000:]
-
-            os.makedirs(os.path.dirname(self.metrics_file), exist_ok=True)
-            with open(self.metrics_file, 'w') as f:
-                json.dump(metrics, f)
-        except Exception as e:
-            print(f"Error saving metric: {e}")
-
-    def _load_metrics(self) -> List[Dict[str, Any]]:
-        """Load metrics from JSON file."""
-        try:
-            if os.path.exists(self.metrics_file):
-                with open(self.metrics_file, 'r') as f:
-                    return json.load(f)
-        except Exception as e:
-            print(f"Error loading metrics: {e}")
-        return []
-
-    def get_metrics_summary(self, metric_type: Optional[str] = None) -> Dict[str, Any]:
-        """Get summary of collected metrics."""
-        metrics = self._load_metrics()
-        
-        if metric_type:
-            metrics = [m for m in metrics if m['type'] == metric_type]
-
-        return {
-            'total_records': len(metrics),
-            'latest_timestamp': metrics[-1]['timestamp'] if metrics else None,
-            'metrics_by_type': self._group_metrics_by_type(metrics)
-        }
-
-    def _group_metrics_by_type(self, metrics: List[Dict[str, Any]]) -> Dict[str, int]:
-        """Group metrics by type and count occurrences."""
-        type_counts = {}
-        for metric in metrics:
-            metric_type = metric['type']
-            type_counts[metric_type] = type_counts.get(metric_type, 0) + 1
-        return type_counts
+def get_metrics_summary() -> Dict[str, List[Dict]]:
+    """
+    Generate a summary of all metrics for monitoring dashboards
+    """
+    return {
+        'request_metrics': [
+            {
+                'name': 'http_request_total',
+                'type': 'counter',
+                'description': 'Total number of HTTP requests',
+                'labels': ['method', 'endpoint', 'status']
+            },
+            {
+                'name': 'http_request_duration_seconds',
+                'type': 'histogram',
+                'description': 'HTTP request duration in seconds',
+                'labels': ['method', 'endpoint']
+            }
+        ],
+        'cache_metrics': [
+            {
+                'name': 'cache_hits_total',
+                'type': 'counter',
+                'description': 'Total number of cache hits',
+                'labels': ['cache_type']
+            },
+            {
+                'name': 'cache_misses_total',
+                'type': 'counter',
+                'description': 'Total number of cache misses',
+                'labels': ['cache_type']
+            }
+        ],
+        'database_metrics': [
+            {
+                'name': 'db_query_duration_seconds',
+                'type': 'histogram',
+                'description': 'Database query duration in seconds',
+                'labels': ['query_type']
+            },
+            {
+                'name': 'active_db_connections',
+                'type': 'gauge',
+                'description': 'Number of active database connections',
+                'labels': []
+            }
+        ],
+        'geospatial_metrics': [
+            {
+                'name': 'geospatial_query_duration_seconds',
+                'type': 'histogram',
+                'description': 'Geospatial query duration in seconds',
+                'labels': ['operation_type']
+            },
+            {
+                'name': 'geospatial_result_count',
+                'type': 'summary',
+                'description': 'Number of results returned by geospatial queries',
+                'labels': ['operation_type']
+            }
+        ],
+        'ml_metrics': [
+            {
+                'name': 'ml_prediction_duration_seconds',
+                'type': 'histogram',
+                'description': 'Machine learning prediction duration in seconds',
+                'labels': ['model_type']
+            },
+            {
+                'name': 'ml_prediction_error_total',
+                'type': 'counter',
+                'description': 'Total number of ML prediction errors',
+                'labels': ['model_type', 'error_type']
+            }
+        ]
+    }
