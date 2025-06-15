@@ -55,3 +55,27 @@
 - Configure Codex projects to execute this script during setup to ensure
   a consistent environment.
 
+## Additional Codex Guidelines
+- **Isolated sandboxes**: use a fresh container or VM per session with no
+  outbound network access except whitelisted packages to avoid "works-on-my-machine" issues.
+- **Pre-installed toolchain**: provide language runtimes, linters, and test
+  frameworks in the base image so code compiles and tests run without manual steps.
+- **Single-concern tasks**: scope each request to one feature, bug fix, or
+  refactor and split larger work into ordered subtasks.
+- **Parallel execution**: run unrelated documentation or style updates in
+  separate branches or sandboxes.
+- **Explicit context**: mention file paths, code snippets, and expected
+  before/after states in prompts.
+- **Numbered imperatives**: list clear, step‑by‑step instructions to remove
+  ambiguity.
+- **Automated testing**: run the full test suite after generation and share
+  failing messages for refinement.
+- **Human review**: treat Codex output like a junior engineer’s work and review
+  changes before merge.
+- **Audit-ready commits**: keep commit messages concise and imperative so
+  changes are traceable.
+- **Security scanning**: integrate static and dynamic analysis in CI and fail
+  builds on vulnerabilities.
+- **Evolve this handbook**: update `AGENTS.md` regularly with new lessons and
+  prompt templates.
+
