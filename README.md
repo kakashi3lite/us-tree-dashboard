@@ -1,217 +1,268 @@
-# 🌳 US Tree Dashboard
+# 🌿 PlantsWorld - Interactive Plant Biodiversity Dashboard
 
-![Python](https://img.shields.io/badge/python-3.9-blue.svg)
-![GDAL](https://img.shields.io/badge/gdal-3.6.2-green.svg)
-![Dash](https://img.shields.io/badge/dash-2.9.3-blue.svg)
-![Docker](https://img.shields.io/badge/docker-compose-blue.svg)
-![License](https://img.shields.io/badge/license-MIT-green.svg)
-![OpenAI](https://img.shields.io/badge/OpenAI-GPT--4-brightgreen.svg)
+A scalable, interactive dashboard for exploring plant biodiversity data with real-time visualizations, conservation insights, and API integration capabilities.
 
-An interactive dashboard for analyzing US tree data with machine learning insights. This project combines geospatial analysis using GDAL with modern web technologies and AI-powered analytics to provide comprehensive visualization and analysis of tree distribution across the United States. Built with a focus on performance and usability, it offers both a web interface and Jupyter notebook environment for deep analysis.
+## 🚀 Features
 
-## 🎯 Features
+### Core Dashboard
+- **Interactive Visualizations**: Dynamic charts and maps powered by Plotly
+- **Real-time Data**: Latest plant biodiversity datasets from GBIF and other sources
+- **Conservation Insights**: IUCN conservation status tracking and analysis
+- **Biodiversity Hotspots**: Global hotspot mapping and metrics
+- **Species Explorer**: Detailed plant family and species information
 
-### 🤖 AI-Powered Analysis
-- Intelligent pattern recognition in tree distribution
-- Species diversity insights with ecological context
-- Smart health trend analysis with recommendations
-- Environmental impact predictions
-- AI-guided urban forestry recommendations
-- Natural language query interface for data exploration
-- Context-aware visualization suggestions
+### Scalability & Integration
+- **Configurable Architecture**: Easy customization through `config.py`
+- **REST API**: Full API access for data integration
+- **Multiple Export Formats**: CSV, JSON, Excel export capabilities
+- **Environment-based Configuration**: Development, production, and testing configs
+- **Modular Design**: Easy to extend and integrate into other projects
 
-### 🗺️ Interactive Visualization
-- Real-time tree location mapping with interactive filters
-- County-level canopy coverage analysis with insights
-- Dynamic species distribution charts and diversity metrics
-- Tree health status visualization with trend analysis
-- Advanced navigation with section anchors
-- Responsive design for all devices
-- Integrated charitable organization information
-
-### 📊 Data Analysis & ML Capabilities
-- City-level tree inventories from 63 major US cities
-- State and county-level canopy coverage metrics with historical trends
-- Species diversity analysis with Shannon diversity index
-- Tree health distribution statistics with predictive indicators
-- DBH (Diameter at Breast Height) analytics
-- Environmental impact assessments
-- Interactive Jupyter notebooks for deep analysis
-- Machine Learning Components:
-  - Tree health prediction using Random Forest models
-  - Growth forecasting with environmental factor consideration
-  - Environmental impact calculations
-  - Optimal planting location recommendations
-  - Model persistence and reusability
-  - AutoML capabilities with Optuna
-  - Experiment tracking with MLflow
-  - GPT-4 powered pattern analysis
-  - AI-assisted data interpretation
-  - Smart outlier detection and analysis
-
-### 🔍 Advanced Filtering
-- State and city selection
-- Canopy coverage range filtering
-- Species filtering
-- Health status filtering
-
-## 🛠️ Technology Stack
-
-- **Frontend**: Dash, Plotly
-- **Backend**: Python, Flask (via Dash)
-- **Data Processing**: Pandas, GeoPandas
-- **AI & ML**: OpenAI GPT-4, scikit-learn, LightGBM, XGBoost
-- **Deployment**: Gunicorn, Whitenoise
-- **Database**: PostgreSQL, SQLAlchemy
-- **Caching**: Redis
-- **Task Queue**: Celery
-- **Maps**: Mapbox
+### Data Management
+- **Automated Data Updates**: Scheduled data fetching from multiple sources
+- **Data Validation**: Built-in data quality checks
+- **Multiple Data Sources**: GBIF, conservation databases, research datasets
+- **Flexible Data Loading**: Support for various file formats and patterns
 
 ## 📦 Installation
 
 ### Prerequisites
-
-- Docker and Docker Compose
-- Git
-- 4GB RAM minimum (8GB recommended)
-- 20GB free disk space
-- OpenAI API key for AI features
+- Python 3.8+
+- pip package manager
 
 ### Quick Start
 
-1. Clone the repository:
+1. **Clone the repository**
    ```bash
-   git clone https://github.com/kakashi3lite/us-tree-dashboard.git
+   git clone <repository-url>
    cd us-tree-dashboard
    ```
 
-2. Set up environment variables:
-   ```bash
-   copy .env.example .env  # Windows
-   cp .env.example .env    # Linux/Mac
-   ```
-   
-3. Configure your OpenAI API key in .env:
-   ```
-   OPENAI_API_KEY=your_api_key_here
-   ```
-
-4. Start the main dashboard:
-   ```bash
-   docker-compose up --build -d
-   ```
-
-5. (Optional) Start the Jupyter environment for analysis:
-   ```bash
-   docker-compose -f docker-compose-jupyter.yml up --build -d
-   ```
-
-### Environment Setup
-
-The project uses Docker containers with all dependencies pre-configured. However, if you need to modify environment variables:
-
-1. Copy the example environment file:
-   ```bash
-   copy .env.example .env  # Windows
-   cp .env.example .env    # Linux/Mac
-   ```
-
-2. Edit `.env` to configure:
-   - Mapbox API token
-   - Database credentials
-   - Other service configurations
-
-## 🚀 Running the Application
-
-### Google Colab
-For quick exploration and analysis:
-
-1. Open our Colab notebook:
-   [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/kakashi3lite/us-tree-dashboard/blob/main/notebooks/colab_analysis.ipynb)
-
-2. The notebook will automatically:
-   - Clone the repository
-   - Install dependencies
-   - Set up the GDAL environment
-   - Load sample data
-
-3. Run the cells to perform:
-   - Geographic analysis
-   - ML predictions
-   - Environmental impact assessment
-
-### Local Development
-1. Activate the virtual environment:
-   ```bash
-   .\venv\Scripts\activate  # Windows
-   source venv/bin/activate # Linux/Mac
-   ```
-2. Install dependencies:
+2. **Install dependencies**
    ```bash
    pip install -r requirements.txt
    ```
 
-
-3. Download required datasets:
+3. **Update datasets** (optional)
    ```bash
-   python src/prepare_data.py
+   python data_updater.py
    ```
 
-4. Run the application:
+4. **Run the dashboard**
    ```bash
    python app.py
    ```
 
-5. Open your browser and navigate to: `http://127.0.0.1:8050`
+5. **Access the dashboard**
+   - Dashboard: http://localhost:8050
+   - API (if enabled): http://localhost:8050/api/v1
 
-### Testing
-Install development dependencies and run the unit tests to verify your setup:
-```bash
-pip install -r requirements.txt
-pip install pytest pytest-cov openai
-pytest
+## ⚙️ Configuration
+
+The dashboard is highly configurable through the `config.py` file:
+
+### Basic Configuration
+```python
+from config import config
+
+# App settings
+config.APP_NAME = "PlantsWorld"
+config.APP_TITLE = "🌿 PlantsWorld Dashboard"
+config.DEBUG = True
+config.PORT = 8050
 ```
 
-### Production Deployment
-1. Set environment variables for production
-2. Use Gunicorn to run the application:
-   ```bash
-   gunicorn app:server --preload --workers 4
-   ```
+### Environment Variables
+```bash
+# Server configuration
+export DEBUG=True
+export HOST=0.0.0.0
+export PORT=8050
+
+# API configuration
+export API_ENABLED=True
+export CORS_ENABLED=True
+
+# Data configuration
+export AUTO_UPDATE=False
+export UPDATE_INTERVAL_HOURS=24
+export MAX_RECORDS=10000
+```
+
+### Dataset Configuration
+Add new datasets by updating `DATASETS_CONFIG` in `config.py`:
+
+```python
+DATASETS_CONFIG = {
+    'my_dataset': {
+        'filename_pattern': 'my_data_*.csv',
+        'display_name': 'My Dataset',
+        'description': 'Description of my dataset'
+    }
+}
+```
+
+## 🔌 API Usage
+
+When API is enabled, the following endpoints are available:
+
+### Health Check
+```bash
+GET /api/v1/health
+```
+
+### List Datasets
+```bash
+GET /api/v1/datasets
+```
+
+### Get Dataset
+```bash
+GET /api/v1/datasets/{dataset_key}?page=1&per_page=100
+```
+
+### Export Dataset
+```bash
+GET /api/v1/datasets/{dataset_key}/export?format=csv
+```
+
+### Search Data
+```bash
+GET /api/v1/search?q=search_term&dataset=dataset_key
+```
+
+### Statistics
+```bash
+GET /api/v1/stats
+```
 
 ## 📊 Data Sources
 
-- **Tree Inventory**: Dryad (5.66M trees across 63 US cities)
-  - Comprehensive street tree data
-  - Species information
-  - Health status
-  - Size measurements
+The dashboard integrates data from multiple sources:
 
-- **Canopy Coverage**: USDA Forest Service Tree Canopy Cover (TCC) dataset
-  - High-resolution canopy coverage data
-  - County-level statistics
-  - Regular updates
+- **GBIF (Global Biodiversity Information Facility)**: Species occurrence data
+- **IUCN Red List**: Conservation status information
+- **Biodiversity Hotspots**: Conservation priority areas
+- **Plant Families Database**: Taxonomic information
 
-- **Geographic Data**: US Census Bureau TIGER/Line shapefiles
-  - County boundaries
-  - State boundaries
-  - Geographic reference data
+## 🛠️ Development
+
+### Project Structure
+```
+us-tree-dashboard/
+├── app.py              # Main dashboard application
+├── config.py           # Configuration management
+├── api.py              # REST API implementation
+├── data_updater.py     # Data fetching and updating
+├── requirements.txt    # Python dependencies
+├── data/              # Data storage directory
+├── logs/              # Application logs
+└── tests/             # Test suite
+```
+
+### Adding New Features
+
+1. **New Visualizations**: Add to the `create_layout()` method in `app.py`
+2. **New Data Sources**: Update `data_updater.py` and `config.py`
+3. **New API Endpoints**: Extend the `api.py` module
+4. **Custom Styling**: Modify the CSS in the layout components
+
+### Testing
+```bash
+# Run tests
+pytest tests/
+
+# Run with coverage
+pytest --cov=. tests/
+```
+
+## 🚀 Deployment
+
+### Docker Deployment
+```bash
+# Build image
+docker build -t plantsworld .
+
+# Run container
+docker run -p 8050:8050 plantsworld
+```
+
+### Production Deployment
+```bash
+# Using Gunicorn
+gunicorn --bind 0.0.0.0:8050 app:server
+
+# With environment variables
+export FLASK_ENV=production
+export DEBUG=False
+gunicorn --bind 0.0.0.0:8050 app:server
+```
+
+### Environment Configurations
+
+- **Development**: `config.DevelopmentConfig`
+- **Production**: `config.ProductionConfig`
+- **Testing**: `config.TestingConfig`
+
+## 🔧 Integration with Other Projects
+
+### As a Standalone Service
+```python
+from app import app, server
+
+# Use the Dash app
+if __name__ == '__main__':
+    app.run_server()
+```
+
+### As an API Service
+```python
+from api import create_api_app
+
+api_app = create_api_app()
+api_app.run()
+```
+
+### As a Module
+```python
+from app import PlantsWorldDashboard
+from config import config
+
+# Create dashboard instance
+dashboard = PlantsWorldDashboard()
+data = dashboard.load_datasets()
+```
+
+## 📈 Performance Optimization
+
+- **Data Caching**: Datasets are cached in memory
+- **Pagination**: API endpoints support pagination
+- **Lazy Loading**: Data loaded on demand
+- **Configurable Limits**: Maximum records per dataset
 
 ## 🤝 Contributing
 
 1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
+2. Create a feature branch
+3. Make your changes
+4. Add tests
+5. Submit a pull request
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md) file for details.
+This project is licensed under the MIT License - see the LICENSE file for details.
 
-## 🙏 Acknowledgments
+## 🌱 Environmental Impact
 
-- Data provided by Dryad and USDA Forest Service
-- US Census Bureau for geographic data
-- Mapbox for mapping capabilities
-- All contributors and maintainers
+This dashboard is designed to support conservation efforts and environmental research. By providing easy access to biodiversity data, we aim to contribute to the protection of our planet's plant life.
+
+## 📞 Support
+
+For questions, issues, or contributions:
+- Create an issue on GitHub
+- Check the documentation
+- Review the configuration options
+
+---
+
+**Made with 💚 for our planet's biodiversity**

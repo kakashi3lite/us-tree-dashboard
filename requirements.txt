@@ -1,29 +1,28 @@
-dash==2.9.3
-pandas==2.0.2
-geopandas==0.13.2
-plotly==5.14.1
-rasterio==1.3.7
+# Core Dashboard Dependencies
+dash==2.17.1
+dash-bootstrap-components==1.5.0
+dash-table==5.0.0
+plotly==5.17.0
+pandas==2.1.4
 numpy==1.24.3
-folium==0.14.0
-dash-bootstrap-components==1.4.1
-scikit-learn==1.3.0
-joblib==1.3.1
-lightgbm==4.1.0
-xgboost==2.0.0
-optuna==3.3.0
-mlflow==2.8.0
-gunicorn==20.1.0
-python-dotenv==1.0.0
+
+# Web Framework
+Flask==3.0.0
+Flask-CORS==4.0.0
+Werkzeug==3.0.1
+
+# Data Processing
 requests==2.31.0
-shapely==2.0.1
-fiona==1.9.4
-whitenoise==6.5.0
-dask==2023.5.0
-pyarrow==12.0.1
-fastparquet==2023.4.0
-geoalchemy2==0.13.3
-psycopg2-binary==2.9.6
-sqlalchemy==2.0.15
-redis==4.5.5
-celery==5.3.0
-pandas>=1.3.0
+openpyxl==3.1.2
+
+# Deployment
+gunicorn==21.2.0
+
+# Development
+pytest==7.4.3
+pytest-cov==4.1.0
+
+# Optional: For enhanced data sources
+# pygbif==0.6.3
+# geopandas==0.14.1
+# folium==0.15.0
