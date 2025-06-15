@@ -1,0 +1,498 @@
+/* PlantsWorld Dashboard - Enhanced UI Styling */
+
+/* Import Google Fonts */
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&family=Nunito:wght@300;400;500;600;700&display=swap');
+
+/* Root Variables */
+:root {
+  --primary-green: #4CAF50;
+  --secondary-green: #388E3C;
+  --dark-green: #2E7D32;
+  --light-green: #C8E6C9;
+  --accent-green: #81C784;
+  --warm-white: #FAFAFA;
+  --soft-gray: #F5F5F5;
+  --text-dark: #2C3E50;
+  --text-light: #6C757D;
+  --shadow-light: 0 2px 10px rgba(76, 175, 80, 0.1);
+  --shadow-medium: 0 4px 20px rgba(76, 175, 80, 0.15);
+  --shadow-heavy: 0 8px 30px rgba(76, 175, 80, 0.2);
+  --border-radius: 15px;
+  --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Global Styles */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Poppins', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: linear-gradient(135deg, #f8fffe 0%, #f0f9f0 100%);
+  color: var(--text-dark);
+  line-height: 1.6;
+  margin: 0;
+  padding: 0;
+}
+
+/* Typography */
+h1, h2, h3, h4, h5, h6 {
+  font-family: 'Nunito', sans-serif;
+  font-weight: 600;
+  color: var(--text-dark);
+}
+
+.display-3 {
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--primary-green), var(--secondary-green));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.nature-gradient {
+  background: linear-gradient(135deg, var(--primary-green), var(--secondary-green));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Hero Section */
+.hero-section {
+  background: linear-gradient(135deg, 
+    rgba(76, 175, 80, 0.9) 0%, 
+    rgba(56, 142, 60, 0.9) 50%, 
+    rgba(46, 125, 50, 0.9) 100%),
+    url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><pattern id="leaves" x="0" y="0" width="20" height="20" patternUnits="userSpaceOnUse"><circle cx="10" cy="10" r="1" fill="%23ffffff" opacity="0.1"/></pattern></defs><rect width="100" height="100" fill="url(%23leaves)"/></svg>');
+  color: white;
+  padding: 80px 0;
+  position: relative;
+  overflow: hidden;
+}
+
+.hero-section::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 120"><path d="M0,96L48,112C96,128,192,160,288,160C384,160,480,128,576,112C672,96,768,96,864,112C960,128,1056,160,1152,160C1248,160,1344,128,1392,112L1440,96L1440,0L1392,0C1344,0,1248,0,1152,0C1056,0,960,0,864,0C768,0,672,0,576,0C480,0,384,0,288,0C192,0,96,0,48,0L0,0Z" fill="%23ffffff" opacity="0.1"></path></svg>') bottom center/cover no-repeat;
+  pointer-events: none;
+}
+
+/* Floating Animation */
+@keyframes float {
+  0%, 100% { transform: translateY(0px) rotate(0deg); }
+  50% { transform: translateY(-10px) rotate(5deg); }
+}
+
+.floating-leaf {
+  animation: float 3s ease-in-out infinite;
+  display: inline-block;
+}
+
+/* Cards */
+.plant-card {
+  background: white;
+  border: none;
+  border-radius: var(--border-radius);
+  box-shadow: var(--shadow-light);
+  transition: var(--transition);
+  overflow: hidden;
+  position: relative;
+}
+
+.plant-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: linear-gradient(90deg, var(--primary-green), var(--accent-green));
+  transform: scaleX(0);
+  transition: var(--transition);
+}
+
+.plant-card:hover {
+  transform: translateY(-5px);
+  box-shadow: var(--shadow-heavy);
+}
+
+.plant-card:hover::before {
+  transform: scaleX(1);
+}
+
+/* Stats Cards */
+.stats-card {
+  background: linear-gradient(135deg, white 0%, #f8fff8 100%);
+  border: 2px solid var(--light-green);
+  border-radius: var(--border-radius);
+  padding: 25px;
+  text-align: center;
+  transition: var(--transition);
+  position: relative;
+  overflow: hidden;
+}
+
+.stats-card::before {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: radial-gradient(circle, var(--light-green) 0%, transparent 70%);
+  opacity: 0;
+  transition: var(--transition);
+}
+
+.stats-card:hover {
+  transform: scale(1.05);
+  border-color: var(--primary-green);
+}
+
+.stats-card:hover::before {
+  opacity: 0.1;
+}
+
+.stats-number {
+  font-size: 2.5rem;
+  font-weight: 700;
+  color: var(--primary-green);
+  margin-bottom: 10px;
+  text-shadow: 0 2px 4px rgba(76, 175, 80, 0.2);
+}
+
+.stats-label {
+  font-size: 0.9rem;
+  color: var(--text-light);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  font-weight: 500;
+}
+
+/* Buttons */
+.btn {
+  border-radius: 25px;
+  font-weight: 500;
+  padding: 12px 24px;
+  transition: var(--transition);
+  border: none;
+  position: relative;
+  overflow: hidden;
+}
+
+.btn::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  transition: width 0.6s, height 0.6s;
+}
+
+.btn:hover::before {
+  width: 300px;
+  height: 300px;
+}
+
+.btn-success {
+  background: linear-gradient(135deg, var(--primary-green), var(--secondary-green));
+  box-shadow: 0 4px 15px rgba(76, 175, 80, 0.3);
+}
+
+.btn-success:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(76, 175, 80, 0.4);
+}
+
+/* Navigation */
+.navbar {
+  background: rgba(255, 255, 255, 0.95) !important;
+  backdrop-filter: blur(10px);
+  box-shadow: var(--shadow-light);
+  transition: var(--transition);
+}
+
+.navbar-brand {
+  font-weight: 700;
+  font-size: 1.5rem;
+  color: var(--primary-green) !important;
+}
+
+/* Form Controls */
+.form-control, .form-select {
+  border-radius: var(--border-radius);
+  border: 2px solid var(--light-green);
+  padding: 12px 16px;
+  transition: var(--transition);
+  background: white;
+}
+
+.form-control:focus, .form-select:focus {
+  border-color: var(--primary-green);
+  box-shadow: 0 0 0 0.2rem rgba(76, 175, 80, 0.25);
+}
+
+/* Dropdown */
+.Select-control {
+  border-radius: var(--border-radius) !important;
+  border: 2px solid var(--light-green) !important;
+  transition: var(--transition) !important;
+}
+
+.Select-control:hover {
+  border-color: var(--primary-green) !important;
+}
+
+/* Loading Spinner */
+.loading-spinner {
+  color: var(--primary-green) !important;
+}
+
+/* Charts and Maps */
+.plotly-graph-div {
+  border-radius: var(--border-radius);
+  overflow: hidden;
+  box-shadow: var(--shadow-light);
+  background: white;
+}
+
+/* Footer */
+footer {
+  background: linear-gradient(135deg, var(--dark-green) 0%, var(--secondary-green) 50%, var(--primary-green) 100%) !important;
+  position: relative;
+  overflow: hidden;
+}
+
+footer::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 100%;
+  background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><pattern id="footerLeaves" x="0" y="0" width="30" height="30" patternUnits="userSpaceOnUse"><path d="M15,5 Q20,10 15,15 Q10,10 15,5" fill="%23ffffff" opacity="0.05"/></pattern></defs><rect width="100" height="100" fill="url(%23footerLeaves)"/></svg>');
+  pointer-events: none;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .hero-section {
+    padding: 60px 0;
+  }
+  
+  .display-3 {
+    font-size: 2.5rem;
+  }
+  
+  .stats-number {
+    font-size: 2rem;
+  }
+  
+  .btn {
+    padding: 10px 20px;
+    font-size: 0.9rem;
+  }
+}
+
+/* Accessibility */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  
+  .floating-leaf {
+    animation: none;
+  }
+}
+
+/* Focus indicators */
+.btn:focus, .form-control:focus, .form-select:focus {
+  outline: 2px solid var(--primary-green);
+  outline-offset: 2px;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--soft-gray);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--primary-green);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--secondary-green);
+}
+
+/* Pulse animation for interactive elements */
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 0 rgba(76, 175, 80, 0.7); }
+  70% { box-shadow: 0 0 0 10px rgba(76, 175, 80, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(76, 175, 80, 0); }
+}
+
+.pulse {
+  animation: pulse 2s infinite;
+}
+
+/* Gradient text effect */
+.gradient-text {
+  background: linear-gradient(135deg, var(--primary-green), var(--secondary-green));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Glass morphism effect */
+.glass {
+  background: rgba(255, 255, 255, 0.25);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: var(--border-radius);
+}
+
+/* Success state animations */
+@keyframes success-bounce {
+  0%, 20%, 53%, 80%, 100% { transform: translate3d(0,0,0); }
+  40%, 43% { transform: translate3d(0, -8px, 0); }
+  70% { transform: translate3d(0, -4px, 0); }
+  90% { transform: translate3d(0, -2px, 0); }
+}
+
+.success-bounce {
+  animation: success-bounce 1s ease;
+}
+
+/* Loading states */
+.loading-shimmer {
+  background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+  background-size: 200% 100%;
+  animation: shimmer 2s infinite;
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* Biodiversity Cards */
+.biodiversity-card {
+  background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
+  border: none;
+  border-radius: 20px;
+  box-shadow: 0 12px 35px rgba(0, 0, 0, 0.08);
+  transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  overflow: hidden;
+  position: relative;
+  min-height: 180px;
+}
+
+.biodiversity-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 5px;
+  background: linear-gradient(90deg, #4CAF50, #66BB6A, #81C784, #A5D6A7);
+  opacity: 0.8;
+}
+
+.biodiversity-card:hover {
+  transform: translateY(-12px) scale(1.02);
+  box-shadow: 0 25px 50px rgba(0, 0, 0, 0.15);
+}
+
+.biodiversity-card:hover::before {
+  height: 8px;
+  opacity: 1;
+}
+
+.biodiversity-card .card-title {
+  font-size: 3rem;
+  font-weight: 800;
+  margin-bottom: 0.5rem;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.biodiversity-card .card-text {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #495057;
+  letter-spacing: 0.5px;
+}
+
+.biodiversity-card .fa-3x {
+  font-size: 3.5rem;
+  opacity: 0.9;
+  transition: all 0.3s ease;
+}
+
+.biodiversity-card:hover .fa-3x {
+  transform: scale(1.1);
+  opacity: 1;
+}
+
+/* Border color variations for biodiversity cards */
+.biodiversity-card.border-success {
+  border-left: 6px solid #28a745;
+}
+
+.biodiversity-card.border-primary {
+  border-left: 6px solid #007bff;
+}
+
+.biodiversity-card.border-info {
+  border-left: 6px solid #17a2b8;
+}
+
+.biodiversity-card.border-warning {
+  border-left: 6px solid #ffc107;
+}
+
+/* Chart Container Enhancements */
+.js-plotly-plot {
+  border-radius: 15px;
+  overflow: hidden;
+}
+
+/* Pulse Animation for Live Data */
+@keyframes pulse-live {
+  0% { opacity: 1; }
+  50% { opacity: 0.7; }
+  100% { opacity: 1; }
+}
+
+.live-indicator {
+  animation: pulse-live 2s infinite;
+}
+
+/* Additional responsive design for biodiversity cards */
+@media (max-width: 576px) {
+  .biodiversity-card {
+    min-height: 150px;
+  }
+  
+  .biodiversity-card .card-title {
+    font-size: 1.8rem;
+  }
+  
+  .biodiversity-card .fa-3x {
+    font-size: 2rem;
+  }
+}

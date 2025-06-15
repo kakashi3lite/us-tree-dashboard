@@ -434,6 +434,204 @@ class PlantsWorldDashboard:
                         )
                     ], md=12)
                 ], className="mt-4 mb-4"),
+                
+                # Biodiversity Dashboard Section
+                dbc.Row([
+                    dbc.Col([
+                        html.H2("🌍 Global Biodiversity Dashboard", className="text-center mb-4 nature-gradient fw-bold"),
+                        html.P("Explore plant families, conservation status, and biodiversity hotspots around the world! 🌿", 
+                               className="text-center mb-4 lead"),
+                        
+                        # Biodiversity Statistics Cards
+                        dbc.Row([
+                            dbc.Col([
+                                dbc.Card([
+                                    dbc.CardBody([
+                                        html.Div([
+                                            html.I(className="fas fa-seedling fa-3x text-success mb-3"),
+                                            html.H2(id="total-species", className="card-title text-success fw-bold mb-2"),
+                                            html.P("🌱 Total Plant Species", className="card-text text-muted")
+                                        ], className="text-center")
+                                    ])
+                                ], className="biodiversity-card border-success shadow-sm h-100")
+                            ], md=3),
+                            dbc.Col([
+                                dbc.Card([
+                                    dbc.CardBody([
+                                        html.Div([
+                                            html.I(className="fas fa-sitemap fa-3x text-primary mb-3"),
+                                            html.H2(id="total-families", className="card-title text-primary fw-bold mb-2"),
+                                            html.P("🌿 Plant Families", className="card-text text-muted")
+                                        ], className="text-center")
+                                    ])
+                                ], className="biodiversity-card border-primary shadow-sm h-100")
+                            ], md=3),
+                            dbc.Col([
+                                dbc.Card([
+                                    dbc.CardBody([
+                                        html.Div([
+                                            html.I(className="fas fa-globe-americas fa-3x text-info mb-3"),
+                                            html.H2(id="total-hotspots", className="card-title text-info fw-bold mb-2"),
+                                            html.P("🌍 Biodiversity Hotspots", className="card-text text-muted")
+                                        ], className="text-center")
+                                    ])
+                                ], className="biodiversity-card border-info shadow-sm h-100")
+                            ], md=3),
+                            dbc.Col([
+                                dbc.Card([
+                                    dbc.CardBody([
+                                        html.Div([
+                                            html.I(className="fas fa-exclamation-triangle fa-3x text-warning mb-3"),
+                                            html.H2(id="threatened-species", className="card-title text-warning fw-bold mb-2"),
+                                            html.P("⚠️ Threatened Species", className="card-text text-muted")
+                                        ], className="text-center")
+                                    ])
+                                ], className="biodiversity-card border-warning shadow-sm h-100")
+                            ], md=3)
+                        ], className="mb-4"),
+                        
+                        # Biodiversity Controls
+                        dbc.Row([
+                            dbc.Col([
+                                dbc.Card([
+                                    dbc.CardHeader([
+                                        html.H5([html.I(className="fas fa-filter text-success me-2"), "🔍 Explore Biodiversity"], 
+                                               className="mb-0 fw-bold")
+                                    ]),
+                                    dbc.CardBody([
+                                        dbc.Row([
+                                            dbc.Col([
+                                                html.Label("🌿 Plant Family:", className="fw-bold text-success"),
+                                                dcc.Dropdown(
+                                                    id='family-dropdown',
+                                                    placeholder="🌱 Select a plant family...",
+                                                    className="mb-3",
+                                                    style={"borderRadius": "10px"}
+                                                ),
+                                            ], md=6),
+                                            dbc.Col([
+                                                html.Label("⚠️ Conservation Status:", className="fw-bold text-warning"),
+                                                dcc.Dropdown(
+                                                    id='conservation-filter',
+                                                    options=[
+                                                        {'label': '🌍 All Species', 'value': 'all'},
+                                                        {'label': '🔴 Critically Endangered', 'value': 'Critically Endangered'},
+                                                        {'label': '🟠 Endangered', 'value': 'Endangered'},
+                                                        {'label': '🟡 Vulnerable', 'value': 'Vulnerable'},
+                                                        {'label': '🟢 Least Concern', 'value': 'Least Concern'}
+                                                    ],
+                                                    value='all',
+                                                    className="mb-3",
+                                                    style={"borderRadius": "10px"}
+                                                ),
+                                            ], md=6),
+                                        ])
+                                    ])
+                                ], className="plant-card")
+                            ], md=12)
+                        ], className="mb-4"),
+                        
+                        # Biodiversity Visualizations
+                        dbc.Row([
+                            dbc.Col([
+                                dbc.Card([
+                                    dbc.CardHeader([
+                                        html.H5([html.I(className="fas fa-map-marked-alt text-info me-2"), "🗺️ Global Biodiversity Hotspots"], 
+                                               className="mb-0 fw-bold")
+                                    ]),
+                                    dbc.CardBody([
+                                        dcc.Loading(
+                                            id="loading-biodiversity-map",
+                                            type="circle",
+                                            children=dcc.Graph(id='biodiversity-map'),
+                                            color="#4CAF50"
+                                        )
+                                    ])
+                                ], className="plant-card")
+                            ], md=12)
+                        ], className="mb-4"),
+                        
+                        dbc.Row([
+                            dbc.Col([
+                                dbc.Card([
+                                    dbc.CardHeader([
+                                        html.H5([html.I(className="fas fa-chart-bar text-primary me-2"), "📊 Plant Families by Species Count"], 
+                                               className="mb-0 fw-bold")
+                                    ]),
+                                    dbc.CardBody([
+                                        dcc.Loading(
+                                            id="loading-families-chart",
+                                            type="circle",
+                                            children=dcc.Graph(id='families-chart'),
+                                            color="#4CAF50"
+                                        )
+                                    ])
+                                ], className="plant-card")
+                            ], md=6),
+                            dbc.Col([
+                                dbc.Card([
+                                    dbc.CardHeader([
+                                        html.H5([html.I(className="fas fa-shield-alt text-warning me-2"), "🛡️ Conservation Status"], 
+                                               className="mb-0 fw-bold")
+                                    ]),
+                                    dbc.CardBody([
+                                        dcc.Loading(
+                                            id="loading-conservation-chart",
+                                            type="circle",
+                                            children=dcc.Graph(id='conservation-chart'),
+                                            color="#4CAF50"
+                                        )
+                                    ])
+                                ], className="plant-card")
+                            ], md=6)
+                        ], className="mb-4"),
+                        
+                        # Species Details Section
+                        dbc.Row([
+                            dbc.Col([
+                                html.Div(id='species-details')
+                            ], md=12)
+                        ], className="mb-4"),
+                        
+                        # Data Export Section
+                        dbc.Row([
+                            dbc.Col([
+                                dbc.Card([
+                                    dbc.CardHeader([
+                                        html.H5([html.I(className="fas fa-download text-success me-2"), "📥 Export Data"], 
+                                               className="mb-0 fw-bold")
+                                    ]),
+                                    dbc.CardBody([
+                                        html.P("Download biodiversity datasets for research and analysis:", className="mb-3"),
+                                        dbc.ButtonGroup([
+                                            dbc.Button(
+                                                [html.I(className="fas fa-sitemap me-2"), "Plant Families"],
+                                                id="btn-families",
+                                                color="success",
+                                                outline=True,
+                                                className="me-2"
+                                            ),
+                                            dbc.Button(
+                                                [html.I(className="fas fa-shield-alt me-2"), "Conservation Status"],
+                                                id="btn-conservation",
+                                                color="warning",
+                                                outline=True,
+                                                className="me-2"
+                                            ),
+                                            dbc.Button(
+                                                [html.I(className="fas fa-globe me-2"), "Biodiversity Hotspots"],
+                                                id="btn-hotspots",
+                                                color="info",
+                                                outline=True
+                                            )
+                                        ]),
+                                        html.Div(id='data-table-container', className="mt-3")
+                                    ])
+                                ], className="plant-card")
+                            ], md=12)
+                        ], className="mb-5")
+                    ], md=12)
+                ], className="mt-5 mb-5"),
             ], fluid=True),
             
             # Footer
