@@ -4,9 +4,27 @@ A scalable, interactive dashboard for exploring plant biodiversity data with rea
 
 ## 🚀 Features
 
-### Core Dashboard
+### 🌳 Tree Dashboard
+- **Interactive Tree Map**: Visualize tree distribution across different states and cities
+- **Summary Statistics**: Get quick insights with summary cards showing key metrics
+- **Data Filtering**: Filter data by state and city for focused analysis
+- **Responsive Design**: Works seamlessly across desktop and mobile devices
+- **Real-time Updates**: Dynamic updates based on user selections
+
+### 🌿 Global Biodiversity Dashboard
+- **Biodiversity Statistics**: Track total species, families, hotspots, and threatened species
+- **Interactive Controls**: Filter by plant family and conservation status
+- **Global Hotspots Map**: Explore biodiversity hotspots worldwide with interactive mapping
+- **Conservation Charts**: Visualize plant families and conservation status distributions
+- **Species Details**: Detailed information about plant families and characteristics
+- **Data Export**: Download biodiversity datasets in CSV format
+- **Enhanced Styling**: Beautiful cards with animations and responsive design
+
+### Core Dashboard Features
 - **Interactive Visualizations**: Dynamic charts and maps powered by Plotly
-- **Real-time Data**: Latest plant biodiversity datasets from GBIF and other sources
+- **Real-time Data Processing**: Efficient data handling and updates
+- **Modern UI/UX**: Clean, intuitive interface design
+- **Cross-platform Compatibility**: Works on Windows, macOS, and Linux
 - **Conservation Insights**: IUCN conservation status tracking and analysis
 - **Biodiversity Hotspots**: Global hotspot mapping and metrics
 - **Species Explorer**: Detailed plant family and species information
