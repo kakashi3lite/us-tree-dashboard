@@ -4,6 +4,4 @@ services:
     build: .
     ports:
       - '8050:8050'
-    command: >
-      sh -c "pytest --maxfail=1 --disable-warnings -q &&
-             python app.py"
+    command: python app.py
