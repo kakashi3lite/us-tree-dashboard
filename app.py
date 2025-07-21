@@ -1,10 +1,11 @@
 import os
+import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
 import dash
 import dash_bootstrap_components as dbc
-from dash import dcc, html, dash_table
+from dash import dcc, html
 from dash.dependencies import Input, Output, State
 import numpy as np
 import pandas as pd
@@ -12,182 +13,165 @@ import geopandas as gpd
 import plotly.express as px
 import plotly.graph_objects as go
 from dotenv import load_dotenv
-from src.charitable_orgs import CHARITABLE_ORGS
-from datetime import datetime, timedelta
-import json
-import logging
-from config import config
 
-# Configure logging
-logging.basicConfig(
-    level=getattr(logging, config.LOGGING_CONFIG['level']),
-    format=config.LOGGING_CONFIG['format']
-)
-logger = logging.getLogger(__name__)
+# Import charitable organizations with error handling
+try:
+    from src.charitable_orgs import CHARITABLE_ORGS
+except ImportError as e:
+    logging.warning(f"Could not import charitable orgs: {e}")
+    CHARITABLE_ORGS = []
 
 # Load environment variables
 load_dotenv()
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
 # Initialize the Dash app with Bootstrap theme
 app = dash.Dash(
     __name__,
-    external_stylesheets=[
-        dbc.themes.BOOTSTRAP, 
-        dbc.icons.FONT_AWESOME,
-        "https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap"
-    ],
-    title=config.APP_TITLE
+    external_stylesheets=[dbc.themes.FLATLY, dbc.icons.FONT_AWESOME],
+    title="US Tree Dashboard"
 )
 
 # For Gunicorn deployment
 server = app.server
 
-# Enhanced navigation bar with plant-lover theme
+# Navigation bar with links
 navbar = dbc.Navbar(
     dbc.Container([
-        html.A(
-            dbc.Row([
-                dbc.Col(html.Img(src="/assets/tree-icon.png", height="30px"), width="auto"),
-                dbc.Col(dbc.NavbarBrand(f"🌿 {config.APP_NAME} - Interactive Biodiversity Dashboard", className="ms-2 fw-bold")),
-            ], align="center", className="g-0"),
-            href="#",
-            style={"textDecoration": "none", "color": "inherit"},
-        ),
-        dbc.Nav([
-            dbc.NavItem(dbc.NavLink("🌿 Explore Trees", href="#", className="text-light fw-semibold")),
-            dbc.NavItem(dbc.NavLink("🌱 Plant Care", href="#", className="text-light fw-semibold")),
-            dbc.NavItem(dbc.NavLink("💚 Get Involved", href="#", className="text-light fw-semibold")),
-            dbc.NavItem(dbc.NavLink("📊 Data API", href="#api", className="text-light fw-semibold", disabled=not config.INTEGRATION_CONFIG['api_enabled'])),
-        ], navbar=True, className="ms-auto"),
+        dbc.Row([
+            dbc.Col([
+                html.I(className="fas fa-tree me-2"),
+                dbc.NavbarBrand("US Tree Dashboard", className="ms-2")
+            ]),
+        ], align="center"),
+        dbc.Row([
+            dbc.Col([
+                dbc.Nav([
+                    dbc.NavItem(dbc.NavLink("Overview", href="#overview")),
+                    dbc.NavItem(dbc.NavLink("Distribution", href="#distribution")),
+                    dbc.NavItem(dbc.NavLink("Species", href="#species")),
+                    dbc.NavItem(dbc.NavLink("Health", href="#health")),
+                    dbc.NavItem(dbc.NavLink("Organizations", href="#organizations")),
+                    dbc.NavItem(dbc.NavLink("Analysis", href="#analysis")),
+                ], navbar=True)
+            ])
+        ])
     ]),
-    color="success",
+    color="primary",
     dark=True,
-    sticky="top",
-    className="shadow-sm",
-    style={
-        "background": "linear-gradient(90deg, #2E7D32 0%, #388E3C 50%, #4CAF50 100%)",
-        "borderBottom": "3px solid #1B5E20"
-    }
+    className="mb-4"
 )
 
-# Load charitable organizations from config or use defaults
-CHARITABLE_ORGS = [
-    {
-        'name': 'TreePeople',
-        'description': 'Inspiring and supporting the people of Southern California to plant and care for trees.',
-        'impact': 'Over 3 million trees planted with 3 million volunteers across Southern California',
-        'donate_url': 'https://treepeople.org/?campaign=430396',
-        'learn_more': 'https://treepeople.org/about-us/'
-    },
-    {
-        'name': 'Arbor Day Foundation',
-        'description': 'A global nonprofit inspiring people to plant, nurture, and celebrate trees.',
-        'impact': 'Over 500 million trees planted across 60+ countries',
-        'donate_url': 'https://donate.arborday.org/',
-        'learn_more': 'https://www.arborday.org/about'
-    },
-    {
-        'name': 'Trees for the Future',
-        'description': 'Training farmers in sustainable agroforestry to restore ecosystems and change lives.',
-        'impact': 'UN World Restoration Flagship organization helping farmers plant Forest Gardens',
-        'donate_url': 'https://trees.org/?form=FUNRTALHRNR',
-        'learn_more': 'https://trees.org/about-us/'
-    }
-]
+# Charitable organizations are imported from src.charitable_orgs
 
-# Use configuration for data directory
-DATA_DIR = config.DATA_DIR
+# Ensure the data directory exists
+DATA_DIR = Path(__file__).parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
-class PlantsWorldDashboard:
-    """Main dashboard class for PlantsWorld - scalable and modular design"""
-    
+class TreeDashboard:
     def __init__(self):
         self.df_trees = None
         self.df_canopy = None
         self.gdf_counties = None
         self.state_options = []
         self.city_options = []
-        self.charitable_orgs = CHARITABLE_ORGS.copy()
-        self.datasets = self.load_datasets()
+        self.charitable_orgs = CHARITABLE_ORGS
+        self._data_loaded = False
         self.load_data()
-        
-    def load_datasets(self) -> dict:
-        """Load all available datasets using configuration"""
-        datasets = {}
-        
-        # Load datasets based on configuration
-        for dataset_key, dataset_config in config.DATASETS_CONFIG.items():
-            try:
-                latest_file = config.get_latest_dataset_file(dataset_key)
-                if latest_file and latest_file.exists():
-                    df = pd.read_csv(latest_file)
-                    # Limit records if configured
-                    max_records = config.UPDATE_CONFIG['max_records_per_dataset']
-                    if len(df) > max_records:
-                        df = df.head(max_records)
-                        logger.info(f"Limited {dataset_key} to {max_records} records")
-                    
-                    datasets[dataset_key] = df
-                    logger.info(f"Loaded {dataset_config['display_name']}: {len(df)} records from {latest_file.name}")
-                else:
-                    logger.warning(f"No files found for {dataset_config['display_name']}")
-                    datasets[dataset_key] = pd.DataFrame()
-            except Exception as e:
-                logger.error(f"Error loading {dataset_config['display_name']}: {e}")
-                datasets[dataset_key] = pd.DataFrame()
-        
-        # If no real data found, create sample data
-        if all(df.empty for df in datasets.values()):
-            logger.info("No datasets found, creating sample data...")
-            datasets = self.create_sample_datasets()
-        
-        return datasets
-    
-    def create_sample_datasets(self) -> dict:
-        """Create sample datasets for demonstration"""
-        logger.info("Creating sample datasets...")
-        
-        # Sample plant families data
-        plant_families = pd.DataFrame({
-            'family': ['Rosaceae', 'Asteraceae', 'Fabaceae', 'Poaceae', 'Orchidaceae'],
-            'common_name': ['Rose Family', 'Sunflower Family', 'Legume Family', 'Grass Family', 'Orchid Family'],
-            'estimated_species': [4828, 32913, 19500, 12074, 28000],
-            'distribution': ['Worldwide', 'Worldwide', 'Worldwide', 'Worldwide', 'Worldwide']
-        })
-        
-        # Sample biodiversity hotspots
-        biodiversity_hotspots = pd.DataFrame({
-            'hotspot_name': ['Amazon Rainforest', 'Congo Basin', 'Southeast Asian Rainforests', 'Atlantic Forest', 'Madagascar'],
-            'country': ['Brazil', 'Democratic Republic of Congo', 'Indonesia', 'Brazil', 'Madagascar'],
-            'latitude': [-3.4653, -0.2280, -0.7893, -14.2350, -18.7669],
-            'longitude': [-62.2159, 15.8277, 113.9213, -51.9253, 46.8691],
-            'endemic_species': [40000, 10000, 25000, 20000, 12000],
-            'area_km2': [6700000, 3700000, 2500000, 1233875, 587041],
-            'threat_level': ['High', 'High', 'Critical', 'Critical', 'Critical']
-        })
-        
-        # Sample conservation status data
-        conservation_status = pd.DataFrame({
-            'species': ['Welwitschia mirabilis', 'Dionaea muscipula', 'Nepenthes rajah', 'Baobab tree', 'Giant Sequoia'],
-            'common_name': ['Welwitschia', 'Venus Flytrap', 'Rajah Pitcher Plant', 'Baobab', 'Giant Sequoia'],
-            'conservation_status': ['Vulnerable', 'Vulnerable', 'Critically Endangered', 'Least Concern', 'Endangered'],
-            'population_trend': ['Decreasing', 'Decreasing', 'Decreasing', 'Stable', 'Increasing'],
-            'main_threats': ['Climate change', 'Habitat loss', 'Over-collection', 'Climate change', 'Fire/Disease']
-        })
-        
-        return {
-            'plant_families': plant_families,
-            'biodiversity_hotspots': biodiversity_hotspots,
-            'conservation_status': conservation_status
-        }
 
     def load_data(self):
-        """Load and prepare all necessary datasets"""
-        # TODO: Replace with actual data loading when we have the files
-        # For now, we'll create sample data
-        self.create_sample_data()
-        self.prepare_dropdown_options()
+        """Load and prepare all necessary datasets with error handling"""
+        try:
+            # Try to load real data first
+            self._load_real_data()
+        except Exception as e:
+            logger.warning(f"Could not load real data: {e}. Using sample data.")
+            self.create_sample_data()
+        finally:
+            self.prepare_dropdown_options()
+            self._data_loaded = True
+
+    def _load_real_data(self):
+        """Attempt to load real datasets from data directory"""
+        data_dir = Path(__file__).parent / "data"
+        
+        # Load tree data from GBIF plants if available
+        gbif_file = data_dir / "gbif_plants_20250614.csv"
+        if gbif_file.exists():
+            gbif_df = pd.read_csv(gbif_file)
+            # Transform GBIF data to tree format
+            self.df_trees = self._transform_gbif_to_trees(gbif_df)
+            logger.info(f"Loaded {len(self.df_trees)} records from GBIF data")
+        else:
+            raise FileNotFoundError("GBIF plants data not found")
+            
+        # Load families data for canopy approximation
+        families_file = data_dir / "plant_families_20250614.csv"
+        if families_file.exists():
+            families_df = pd.read_csv(families_file)
+            self.df_canopy = self._transform_families_to_canopy(families_df)
+            logger.info(f"Generated {len(self.df_canopy)} canopy records from families data")
+        else:
+            raise FileNotFoundError("Plant families data not found")
+
+    def _transform_gbif_to_trees(self, gbif_df: pd.DataFrame) -> pd.DataFrame:
+        """Transform GBIF data to tree dashboard format"""
+        # Filter for US data if country column exists, otherwise use all data
+        if 'country' in gbif_df.columns:
+            us_data = gbif_df[gbif_df['country'] == 'United States'].copy()
+            if us_data.empty:
+                # If no US data, use all data as sample
+                us_data = gbif_df.copy()
+        else:
+            us_data = gbif_df.copy()
+        
+        # Ensure we have some data to work with
+        if us_data.empty:
+            # Create minimal sample data if no real data
+            us_data = pd.DataFrame({
+                'scientificName': ['Quercus alba', 'Acer rubrum', 'Pinus strobus'] * 100,
+                'stateProvince': ['California', 'Texas', 'Florida'] * 100,
+                'decimalLatitude': [34.0] * 300,
+                'decimalLongitude': [-118.0] * 300
+            })
+        
+        # Take a sample if dataset is too large
+        if len(us_data) > 5000:
+            us_data = us_data.sample(n=5000, random_state=42)
+        
+        # Create tree data structure
+        tree_data = {
+            'city': us_data['stateProvince'].fillna('Unknown') if 'stateProvince' in us_data.columns else ['Unknown'] * len(us_data),
+            'species': us_data['scientificName'].fillna('Unknown Species') if 'scientificName' in us_data.columns else ['Unknown Species'] * len(us_data),
+            'health': np.random.choice(['Good', 'Fair', 'Poor'], len(us_data), p=[0.6, 0.3, 0.1]),
+            'latitude': us_data['decimalLatitude'].fillna(39.8283) if 'decimalLatitude' in us_data.columns else [39.8283] * len(us_data),
+            'longitude': us_data['decimalLongitude'].fillna(-98.5795) if 'decimalLongitude' in us_data.columns else [-98.5795] * len(us_data),
+            'dbh': np.random.uniform(10, 100, len(us_data))
+        }
+        
+        return pd.DataFrame(tree_data)
+
+    def _transform_families_to_canopy(self, families_df: pd.DataFrame) -> pd.DataFrame:
+        """Transform families data to canopy coverage format"""
+        # Create synthetic canopy data based on families
+        states = ['CA', 'TX', 'FL', 'NY', 'PA', 'IL', 'OH', 'GA', 'NC', 'MI']
+        canopy_data = []
+        
+        for state in states:
+            for i in range(10):  # 10 counties per state
+                canopy_data.append({
+                    'state': state,
+                    'county': f'{state}_County_{i+1}',
+                    'canopy_pct': np.random.uniform(15, 75)
+                })
+        
+        return pd.DataFrame(canopy_data)
 
     def create_sample_data(self):
         """Create sample data for development"""
@@ -220,1066 +204,716 @@ class PlantsWorldDashboard:
         ]
 
     def create_layout(self) -> html.Div:
-        """Create the main dashboard layout with plant-lover theme"""
-        return html.Div([
-            
-            # Hero Section
-            html.Div([
-                dbc.Container([
-                    dbc.Row([
-                        dbc.Col([
-                            html.H1([
-                                f"🌿 Welcome to {config.APP_NAME} ",
-                                html.Span("🌱", className="floating-leaf")
-                            ], className="display-3 fw-bold mb-4", style={"textAlign": "center"}),
-                            html.P(
-                                config.APP_DESCRIPTION + ". Explore plant distributions, "
-                                "learn about species diversity, and join the movement to protect our green planet! 🌍",
-                                className="lead text-center mb-4", style={"fontSize": "1.3rem"}
-                            ),
-                            html.Div([
-                                dbc.Button(
-                                    [html.I(className="fas fa-seedling me-2"), "Start Exploring"],
-                                    color="success", size="lg", className="me-3",
-                                    style={"borderRadius": "25px", "padding": "12px 30px"}
-                                ),
-                                dbc.Button(
-                                    [html.I(className="fas fa-heart me-2"), "Plant Care Tips"],
-                                    color="light", size="lg", outline=True,
-                                    style={"borderRadius": "25px", "padding": "12px 30px", "color": "white", "borderColor": "white"}
-                                ),
-                                dbc.Button(
-                                    [html.I(className="fas fa-globe me-2"), "API Access"],
-                                    color="info", size="lg", outline=True, className="ms-2",
-                                    style={"borderRadius": "25px", "padding": "12px 30px", "color": "white", "borderColor": "white"},
-                                    disabled=not config.INTEGRATION_CONFIG['api_enabled']
-                                ) if config.INTEGRATION_CONFIG['api_enabled'] else html.Div()
-                            ], className="text-center")
-                        ], md=12)
-                    ])
-                ])
-            ], className="hero-section"),
-            
-            # Plant Care Tips Section
-            dbc.Container([
-                dbc.Row([
-                    dbc.Col([
-                        html.H2("🌱 Daily Plant Wisdom", className="text-center mb-4 nature-gradient fw-bold"),
-                        dbc.Row([
-                            dbc.Col([
-                                dbc.Card([
-                                    dbc.CardBody([
-                                        html.H4([html.I(className="fas fa-tint text-primary me-2"), "Watering Tips"], className="card-title"),
-                                        html.P("💧 Water your plants early morning or late evening to reduce evaporation. "
-                                              "Check soil moisture by inserting your finger 1-2 inches deep!", className="card-text")
-                                    ])
-                                ], className="plant-card mb-3")
-                            ], md=4),
-                            dbc.Col([
-                                dbc.Card([
-                                    dbc.CardBody([
-                                        html.H4([html.I(className="fas fa-sun text-warning me-2"), "Light Love"], className="card-title"),
-                                        html.P("☀️ Most houseplants thrive in bright, indirect light. "
-                                              "Rotate your plants weekly for even growth and happy leaves!", className="card-text")
-                                    ])
-                                ], className="plant-card mb-3")
-                            ], md=4),
-                            dbc.Col([
-                                dbc.Card([
-                                    dbc.CardBody([
-                                        html.H4([html.I(className="fas fa-leaf text-success me-2"), "Growth Boost"], className="card-title"),
-                                        html.P("🌿 Talk to your plants! Studies show plants respond to vibrations. "
-                                              "Plus, it's a great way to check for pests and health!", className="card-text")
-                                    ])
-                                ], className="plant-card mb-3")
-                            ], md=4)
-                        ])
-                    ], md=12)
-                ], className="mb-5"),
-                
-                # Interactive Controls Section
-                dbc.Row([
-                    dbc.Col([
-                        dbc.Card([
-                            dbc.CardHeader([
-                                html.H4([html.I(className="fas fa-map-marked-alt text-success me-2"), "🗺️ Explore Tree Data"], 
-                                       className="mb-0 fw-bold")
-                            ]),
-                            dbc.CardBody([
-                                dbc.Row([
-                                    dbc.Col([
-                                        html.Label("🏛️ Select State:", className="fw-bold text-success"),
-                                        dcc.Dropdown(
-                                            id='state-dropdown',
-                                            options=self.state_options,
-                                            placeholder="🌲 Choose your state adventure...",
-                                            className="mb-3",
-                                            style={"borderRadius": "10px"}
-                                        ),
-                                    ], md=6),
-                                    dbc.Col([
-                                        html.Label("🏙️ Select City:", className="fw-bold text-success"),
-                                        dcc.Dropdown(
-                                            id='city-dropdown',
-                                            options=self.city_options,
-                                            placeholder="🌳 Pick your urban forest...",
-                                            className="mb-3",
-                                            style={"borderRadius": "10px"}
-                                        ),
-                                    ], md=6),
-                                ]),
-                                html.Label("🌿 Canopy Coverage Range:", className="fw-bold text-success"),
-                                dcc.RangeSlider(
-                                    id='canopy-slider',
-                                    min=0,
-                                    max=100,
-                                    step=1,
-                                    value=[0, 100],
-                                    marks={
-                                        0: {'label': '🌱 0%', 'style': {'color': '#4CAF50'}},
-                                        25: {'label': '🌿 25%', 'style': {'color': '#4CAF50'}},
-                                        50: {'label': '🌳 50%', 'style': {'color': '#4CAF50'}},
-                                        75: {'label': '🌲 75%', 'style': {'color': '#4CAF50'}},
-                                        100: {'label': '🌴 100%', 'style': {'color': '#4CAF50'}}
-                                    },
-                                    className="mb-4"
-                                ),
-                            ])
-                        ], className="plant-card")
-                    ], md=12),
-                ]),
-
-                # Live Update Indicator
-                dbc.Row([
-                    dbc.Col([
-                        html.Div([
-                            dbc.Badge(
-                                [html.I(className="fas fa-circle me-1"), "Live Data"],
-                                color="success",
-                                className="me-2"
-                            ),
-                            html.Span(id="live-indicator", className="text-muted small"),
-                            html.Span(" | ", className="text-muted mx-2"),
-                            html.Span(id="data-count", className="text-success fw-bold"),
-                            html.Span(" | Next update in: ", className="text-muted mx-2"),
-                            html.Span(id="countdown", className="text-primary fw-bold")
-                        ], className="text-center p-2", style={
-                            "background": "rgba(76, 175, 80, 0.1)",
-                            "borderRadius": "15px",
-                            "border": "1px solid rgba(76, 175, 80, 0.3)"
-                        })
-                    ], md=12)
-                ], className="mt-4"),
-
-                # Summary Cards
-                dbc.Row([
-                    dbc.Col(id='summary-cards', md=12)
-                ], className="mt-4"),
-
-                # Charts
-                dbc.Row([
-                    dbc.Col([
-                        dcc.Loading(
-                            id="loading-charts",
-                            type="circle",
-                            children=html.Div(id='charts-container'),
-                            color="#4CAF50"
-                        )
-                    ], md=12)
-                ], className="mt-4"),
-                
-                # Charitable Organizations Section
-                dbc.Row([
-                    dbc.Col([
-                        html.H2("💚 Support Tree Conservation", className="text-center mb-4 nature-gradient fw-bold"),
-                        html.P("Join these amazing organizations in their mission to protect and plant trees worldwide! 🌍", 
-                               className="text-center mb-4 lead"),
-                        dbc.Row([
-                            dbc.Col([
-                                dbc.Card([
-                                    dbc.CardBody([
-                                        html.H5([html.I(className="fas fa-tree text-success me-2"), org['name']], className="card-title"),
-                                        html.P(org['description'], className="card-text"),
-                                        dbc.Button(
-                                            [html.I(className="fas fa-external-link-alt me-2"), "Learn More"],
-                                            href=org['learn_more'],
-                                            target="_blank",
-                                            color="success",
-                                            outline=True,
-                                            size="sm",
-                                            style={"borderRadius": "15px"}
-                                        )
-                                    ])
-                                ], className="plant-card mb-3 h-100")
-                            ], md=4) for org in self.charitable_orgs[:6]  # Show first 6 organizations
-                        ])
-                    ], md=12)
-                ], className="mt-5 mb-5"),
-                
-                # Interval component for live updates
-                dcc.Interval(
-                    id='interval-component',
-                    interval=30*1000,  # Update every 30 seconds
-                    n_intervals=0
-                ),
-
-                # Map
-                dbc.Row([
-                    dbc.Col([
-                        dcc.Loading(
-                            id="loading-map",
-                            type="circle",
-                            children=html.Div(id='map-container'),
-                            color="#4CAF50"
-                        )
-                    ], md=12)
-                ], className="mt-4 mb-4"),
-                
-                # Biodiversity Dashboard Section
-                dbc.Row([
-                    dbc.Col([
-                        html.H2("🌍 Global Biodiversity Dashboard", className="text-center mb-4 nature-gradient fw-bold"),
-                        html.P("Explore plant families, conservation status, and biodiversity hotspots around the world! 🌿", 
-                               className="text-center mb-4 lead"),
-                        
-                        # Biodiversity Statistics Cards
-                        dbc.Row([
-                            dbc.Col([
-                                dbc.Card([
-                                    dbc.CardBody([
-                                        html.Div([
-                                            html.I(className="fas fa-seedling fa-3x text-success mb-3"),
-                                            html.H2(id="total-species", className="card-title text-success fw-bold mb-2"),
-                                            html.P("🌱 Total Plant Species", className="card-text text-muted")
-                                        ], className="text-center")
-                                    ])
-                                ], className="biodiversity-card border-success shadow-sm h-100")
-                            ], md=3),
-                            dbc.Col([
-                                dbc.Card([
-                                    dbc.CardBody([
-                                        html.Div([
-                                            html.I(className="fas fa-sitemap fa-3x text-primary mb-3"),
-                                            html.H2(id="total-families", className="card-title text-primary fw-bold mb-2"),
-                                            html.P("🌿 Plant Families", className="card-text text-muted")
-                                        ], className="text-center")
-                                    ])
-                                ], className="biodiversity-card border-primary shadow-sm h-100")
-                            ], md=3),
-                            dbc.Col([
-                                dbc.Card([
-                                    dbc.CardBody([
-                                        html.Div([
-                                            html.I(className="fas fa-globe-americas fa-3x text-info mb-3"),
-                                            html.H2(id="total-hotspots", className="card-title text-info fw-bold mb-2"),
-                                            html.P("🌍 Biodiversity Hotspots", className="card-text text-muted")
-                                        ], className="text-center")
-                                    ])
-                                ], className="biodiversity-card border-info shadow-sm h-100")
-                            ], md=3),
-                            dbc.Col([
-                                dbc.Card([
-                                    dbc.CardBody([
-                                        html.Div([
-                                            html.I(className="fas fa-exclamation-triangle fa-3x text-warning mb-3"),
-                                            html.H2(id="threatened-species", className="card-title text-warning fw-bold mb-2"),
-                                            html.P("⚠️ Threatened Species", className="card-text text-muted")
-                                        ], className="text-center")
-                                    ])
-                                ], className="biodiversity-card border-warning shadow-sm h-100")
-                            ], md=3)
-                        ], className="mb-4"),
-                        
-                        # Biodiversity Controls
-                        dbc.Row([
-                            dbc.Col([
-                                dbc.Card([
-                                    dbc.CardHeader([
-                                        html.H5([html.I(className="fas fa-filter text-success me-2"), "🔍 Explore Biodiversity"], 
-                                               className="mb-0 fw-bold")
-                                    ]),
-                                    dbc.CardBody([
-                                        dbc.Row([
-                                            dbc.Col([
-                                                html.Label("🌿 Plant Family:", className="fw-bold text-success"),
-                                                dcc.Dropdown(
-                                                    id='family-dropdown',
-                                                    placeholder="🌱 Select a plant family...",
-                                                    className="mb-3",
-                                                    style={"borderRadius": "10px"}
-                                                ),
-                                            ], md=6),
-                                            dbc.Col([
-                                                html.Label("⚠️ Conservation Status:", className="fw-bold text-warning"),
-                                                dcc.Dropdown(
-                                                    id='conservation-filter',
-                                                    options=[
-                                                        {'label': '🌍 All Species', 'value': 'all'},
-                                                        {'label': '🔴 Critically Endangered', 'value': 'Critically Endangered'},
-                                                        {'label': '🟠 Endangered', 'value': 'Endangered'},
-                                                        {'label': '🟡 Vulnerable', 'value': 'Vulnerable'},
-                                                        {'label': '🟢 Least Concern', 'value': 'Least Concern'}
-                                                    ],
-                                                    value='all',
-                                                    className="mb-3",
-                                                    style={"borderRadius": "10px"}
-                                                ),
-                                            ], md=6),
-                                        ])
-                                    ])
-                                ], className="plant-card")
-                            ], md=12)
-                        ], className="mb-4"),
-                        
-                        # Biodiversity Visualizations
-                        dbc.Row([
-                            dbc.Col([
-                                dbc.Card([
-                                    dbc.CardHeader([
-                                        html.H5([html.I(className="fas fa-map-marked-alt text-info me-2"), "🗺️ Global Biodiversity Hotspots"], 
-                                               className="mb-0 fw-bold")
-                                    ]),
-                                    dbc.CardBody([
-                                        dcc.Loading(
-                                            id="loading-biodiversity-map",
-                                            type="circle",
-                                            children=dcc.Graph(id='biodiversity-map'),
-                                            color="#4CAF50"
-                                        )
-                                    ])
-                                ], className="plant-card")
-                            ], md=12)
-                        ], className="mb-4"),
-                        
-                        dbc.Row([
-                            dbc.Col([
-                                dbc.Card([
-                                    dbc.CardHeader([
-                                        html.H5([html.I(className="fas fa-chart-bar text-primary me-2"), "📊 Plant Families by Species Count"], 
-                                               className="mb-0 fw-bold")
-                                    ]),
-                                    dbc.CardBody([
-                                        dcc.Loading(
-                                            id="loading-families-chart",
-                                            type="circle",
-                                            children=dcc.Graph(id='families-chart'),
-                                            color="#4CAF50"
-                                        )
-                                    ])
-                                ], className="plant-card")
-                            ], md=6),
-                            dbc.Col([
-                                dbc.Card([
-                                    dbc.CardHeader([
-                                        html.H5([html.I(className="fas fa-shield-alt text-warning me-2"), "🛡️ Conservation Status"], 
-                                               className="mb-0 fw-bold")
-                                    ]),
-                                    dbc.CardBody([
-                                        dcc.Loading(
-                                            id="loading-conservation-chart",
-                                            type="circle",
-                                            children=dcc.Graph(id='conservation-chart'),
-                                            color="#4CAF50"
-                                        )
-                                    ])
-                                ], className="plant-card")
-                            ], md=6)
-                        ], className="mb-4"),
-                        
-                        # Species Details Section
-                        dbc.Row([
-                            dbc.Col([
-                                html.Div(id='species-details')
-                            ], md=12)
-                        ], className="mb-4"),
-                        
-                        # Data Export Section
-                        dbc.Row([
-                            dbc.Col([
-                                dbc.Card([
-                                    dbc.CardHeader([
-                                        html.H5([html.I(className="fas fa-download text-success me-2"), "📥 Export Data"], 
-                                               className="mb-0 fw-bold")
-                                    ]),
-                                    dbc.CardBody([
-                                        html.P("Download biodiversity datasets for research and analysis:", className="mb-3"),
-                                        dbc.ButtonGroup([
-                                            dbc.Button(
-                                                [html.I(className="fas fa-sitemap me-2"), "Plant Families"],
-                                                id="btn-families",
-                                                color="success",
-                                                outline=True,
-                                                className="me-2"
-                                            ),
-                                            dbc.Button(
-                                                [html.I(className="fas fa-shield-alt me-2"), "Conservation Status"],
-                                                id="btn-conservation",
-                                                color="warning",
-                                                outline=True,
-                                                className="me-2"
-                                            ),
-                                            dbc.Button(
-                                                [html.I(className="fas fa-globe me-2"), "Biodiversity Hotspots"],
-                                                id="btn-hotspots",
-                                                color="info",
-                                                outline=True
-                                            )
-                                        ]),
-                                        html.Div(id='data-table-container', className="mt-3")
-                                    ])
-                                ], className="plant-card")
-                            ], md=12)
-                        ], className="mb-5")
-                    ], md=12)
-                ], className="mt-5 mb-5"),
-            ], fluid=True),
-            
-            # Footer
-            html.Footer([
-                html.Div([
+        """Create the main dashboard layout with improved error handling and responsiveness"""
+        try:
+            return html.Div([
+                # Header with improved navigation
+                dbc.Navbar(
                     dbc.Container([
                         dbc.Row([
                             dbc.Col([
-                                html.H5(f"🌿 {config.APP_NAME}", className="text-white mb-3"),
-                                html.P("Connecting nature lovers with data-driven insights to protect our planet's green heritage.", 
-                                       className="text-light mb-3"),
-                                html.Div([
-                                    dbc.Button(
-                                        html.I(className="fab fa-github"),
-                                        color="light", outline=True, size="sm", className="me-2",
-                                        style={"borderRadius": "50%", "width": "40px", "height": "40px"}
-                                    ),
-                                    dbc.Button(
-                                        html.I(className="fab fa-twitter"),
-                                        color="light", outline=True, size="sm", className="me-2",
-                                        style={"borderRadius": "50%", "width": "40px", "height": "40px"}
-                                    ),
-                                    dbc.Button(
-                                        html.I(className="fas fa-envelope"),
-                                        color="light", outline=True, size="sm",
-                                        style={"borderRadius": "50%", "width": "40px", "height": "40px"}
-                                    )
-                                ])
-                            ], md=4),
+                                html.A([
+                                    html.I(className="fas fa-tree me-2"),
+                                    html.Span("🌳 AroundTheTrees", className="navbar-brand")
+                                ], href="#", style={"textDecoration": "none", "color": "white"})
+                            ], width="auto"),
                             dbc.Col([
-                                html.H6("🌱 Quick Links", className="text-white mb-3"),
-                                html.Ul([
-                                    html.Li(html.A("Plant Care Guide", href="#", className="text-light text-decoration-none")),
-                                    html.Li(html.A("Tree Species Database", href="#", className="text-light text-decoration-none")),
-                                    html.Li(html.A("Conservation Tips", href="#", className="text-light text-decoration-none")),
-                                    html.Li(html.A("API Documentation", href="#", className="text-light text-decoration-none",
-                                                  style={"display": "block" if config.INTEGRATION_CONFIG['api_enabled'] else "none"})),
-                                    html.Li(html.A("Community Forum", href="#", className="text-light text-decoration-none"))
-                                ], className="list-unstyled")
-                            ], md=4),
-                            dbc.Col([
-                                html.H6("🌍 Get Involved", className="text-white mb-3"),
-                                html.P("Every tree counts! Join our community of plant lovers and make a difference.", 
-                                       className="text-light mb-3"),
-                                dbc.Button(
-                                    [html.I(className="fas fa-seedling me-2"), "Plant a Tree Today"],
-                                    color="success", size="sm",
-                                    style={"borderRadius": "20px"}
-                                )
-                            ], md=4)
+                                dbc.Nav([
+                                    dbc.NavItem(dbc.NavLink("Dashboard", href="#dashboard", className="nav-link")),
+                                    dbc.NavItem(dbc.NavLink("About", href="#about", className="nav-link")),
+                                    dbc.NavItem(dbc.NavLink("Support", href="#support", className="nav-link")),
+                                ], navbar=True, className="ms-auto")
+                            ])
+                        ], className="w-100 d-flex justify-content-between align-items-center")
+                    ], fluid=True),
+                    color="success",
+                    dark=True,
+                    className="mb-4"
+                ),
+                
+                # Main content with better error boundaries
+                dbc.Container([
+                    # Status indicator
+                    dbc.Alert(
+                        id="status-alert",
+                        children=self._get_status_message(),
+                        color="info" if self._data_loaded else "warning",
+                        dismissable=True,
+                        className="mb-3"
+                    ),
+                    
+                    # Controls section with improved layout
+                    dbc.Card([
+                        dbc.CardHeader([
+                            html.H4("🎯 Dashboard Controls", className="mb-0")
                         ]),
-                        html.Hr(className="my-4", style={"borderColor": "rgba(255,255,255,0.3)"}),
-                        dbc.Row([
-                            dbc.Col([
-                                html.P(f"© {datetime.now().year} {config.APP_NAME}. Made with 💚 for our planet.", 
-                                       className="text-center text-light mb-0")
-                            ], md=12)
+                        dbc.CardBody([
+                            dbc.Row([
+                                dbc.Col([
+                                    html.Label("Select State:", className="form-label fw-bold"),
+                                    dcc.Dropdown(
+                                        id='state-dropdown',
+                                        options=self.state_options,
+                                        placeholder="Choose a state...",
+                                        className="mb-3",
+                                        clearable=True
+                                    ),
+                                ], md=6),
+                                dbc.Col([
+                                    html.Label("Select City/Region:", className="form-label fw-bold"),
+                                    dcc.Dropdown(
+                                        id='city-dropdown',
+                                        options=self.city_options,
+                                        placeholder="Choose a city...",
+                                        className="mb-3",
+                                        clearable=True
+                                    ),
+                                ], md=6),
+                            ]),
+                            dbc.Row([
+                                dbc.Col([
+                                    html.Label("Canopy Coverage Range:", className="form-label fw-bold"),
+                                    dcc.RangeSlider(
+                                        id='canopy-slider',
+                                        min=0,
+                                        max=100,
+                                        step=5,
+                                        value=[0, 100],
+                                        marks={
+                                            0: {'label': '0%', 'style': {'color': '#666'}},
+                                            25: {'label': '25%', 'style': {'color': '#666'}},
+                                            50: {'label': '50%', 'style': {'color': '#666'}},
+                                            75: {'label': '75%', 'style': {'color': '#666'}},
+                                            100: {'label': '100%', 'style': {'color': '#666'}}
+                                        },
+                                        tooltip={"placement": "bottom", "always_visible": True},
+                                        className="mb-3"
+                                    ),
+                                ], md=12)
+                            ])
+                        ])
+                    ], className="mb-4"),
+
+                    # Summary Cards with loading states
+                    dbc.Row([
+                        dbc.Col([
+                            dcc.Loading(
+                                id="loading-summary",
+                                type="border",
+                                color="#28a745",
+                                children=html.Div(id='summary-cards')
+                            )
+                        ], md=12)
+                    ], className="mb-4"),
+
+                    # Charts section with improved loading
+                    dbc.Card([
+                        dbc.CardHeader([
+                            html.H4("📊 Data Visualizations", className="mb-0")
+                        ]),
+                        dbc.CardBody([
+                            dcc.Loading(
+                                id="loading-charts",
+                                type="cube",
+                                color="#28a745",
+                                children=html.Div(id='charts-container')
+                            )
+                        ])
+                    ], className="mb-4"),
+
+                    # Map section with improved loading
+                    dbc.Card([
+                        dbc.CardHeader([
+                            html.H4("🗺️ Interactive Map", className="mb-0")
+                        ]),
+                        dbc.CardBody([
+                            dcc.Loading(
+                                id="loading-map",
+                                type="graph",
+                                color="#28a745",
+                                children=html.Div(id='map-container')
+                            )
+                        ])
+                    ], className="mb-4"),
+                ], fluid=True),
+
+                # Enhanced Footer
+                dbc.Container([
+                    html.Hr(),
+                    dbc.Row([
+                        dbc.Col([
+                            html.Div([
+                                html.H5("🌱 Support Environmental Organizations", className="text-center mb-3"),
+                                html.P("Help make a difference by supporting tree planting and conservation efforts:", 
+                                      className="text-center text-muted mb-3"),
+                                html.Div([
+                                    dbc.Button([
+                                        html.I(className="fas fa-seedling me-2"),
+                                        "TreePeople"
+                                    ], href="https://treepeople.org/?campaign=430396", 
+                                       target="_blank", color="success", size="sm", className="me-2 mb-2"),
+                                    dbc.Button([
+                                        html.I(className="fas fa-tree me-2"),
+                                        "Arbor Day Foundation"
+                                    ], href="https://donate.arborday.org/", 
+                                       target="_blank", color="success", size="sm", className="me-2 mb-2"),
+                                    dbc.Button([
+                                        html.I(className="fas fa-leaf me-2"),
+                                        "Trees for the Future"
+                                    ], href="https://trees.org/?form=FUNRTALHRNR", 
+                                       target="_blank", color="success", size="sm", className="mb-2")
+                                ], className="text-center")
+                            ], className="mb-4"),
+                            
+                            html.Div([
+                                html.P([
+                                    "Data sources: ", 
+                                    html.Strong("GBIF (Global Biodiversity Information Facility)"),
+                                    ", Plant Families Database, Conservation Status Data"
+                                ], className="text-muted text-center mb-2"),
+                                html.P([
+                                    "Built with ❤️ using ", 
+                                    html.A("Dash", href="https://plotly.com/dash/", target="_blank", className="text-success"),
+                                    " and ",
+                                    html.A("Plotly", href="https://plotly.com/", target="_blank", className="text-success")
+                                ], className="text-muted text-center")
+                            ])
                         ])
                     ])
-                ], style={
-                    "background": "linear-gradient(135deg, #2E7D32 0%, #388E3C 50%, #4CAF50 100%)",
-                    "padding": "40px 0 20px 0",
-                    "marginTop": "50px"
-                })
+                ], fluid=True, className="py-4 bg-light")
+            ])
+        except Exception as e:
+            logger.error(f"Error creating layout: {e}")
+            return self._create_error_layout()
+
+    def _get_status_message(self) -> str:
+        """Get current dashboard status message"""
+        if self._data_loaded:
+            tree_count = len(self.df_trees) if self.df_trees is not None else 0
+            canopy_count = len(self.df_canopy) if self.df_canopy is not None else 0
+            return f"✅ Dashboard loaded successfully! Displaying {tree_count:,} tree records and {canopy_count} canopy measurements."
+        else:
+            return "⚠️ Dashboard is loading data. Some features may be limited."
+
+    def _create_error_layout(self) -> html.Div:
+        """Create an error layout when main layout fails"""
+        return html.Div([
+            dbc.Container([
+                dbc.Alert([
+                    html.H4("⚠️ Dashboard Error", className="alert-heading"),
+                    html.P("We're experiencing technical difficulties. Please refresh the page or contact support if the problem persists."),
+                    html.Hr(),
+                    html.P("Error occurred while loading the dashboard layout.", className="mb-0")
+                ], color="danger", className="mt-5")
             ])
         ])
 
-    def create_plant_themed_summary_cards(
+    def create_summary_cards(
         self, selected_state: Optional[str], selected_city: Optional[str]
-    ) -> html.Div:
-        """Create plant-lover themed summary statistics cards"""
+    ) -> List[dbc.Card]:
+        """Create summary statistics cards"""
         if selected_city:
             city_data = self.df_trees[self.df_trees['city'] == selected_city]
-            total_trees = len(city_data)
-            avg_dbh = city_data['dbh'].mean()
-            unique_species = city_data['species'].nunique()
-            health_score = min(95, max(60, avg_dbh * 2)) if not city_data.empty else 0
-            
-            cards = dbc.Row([
-                dbc.Col([
-                    dbc.Card([
-                        dbc.CardBody([
-                            html.Div([
-                                html.I(className="fas fa-tree fa-2x text-success mb-2"),
-                                html.H3(f"{total_trees:,}", className="card-title text-success fw-bold"),
-                                html.P("🌳 Trees Discovered", className="card-text text-muted")
-                            ], className="text-center")
-                        ])
-                    ], className="plant-card border-success")
-                ], md=3),
-                dbc.Col([
-                    dbc.Card([
-                        dbc.CardBody([
-                            html.Div([
-                                html.I(className="fas fa-ruler fa-2x text-primary mb-2"),
-                                html.H3(f"{avg_dbh:.1f} cm", className="card-title text-primary fw-bold"),
-                                html.P("📏 Average Trunk Size", className="card-text text-muted")
-                            ], className="text-center")
-                        ])
-                    ], className="plant-card border-primary")
-                ], md=3),
-                dbc.Col([
-                    dbc.Card([
-                        dbc.CardBody([
-                            html.Div([
-                                html.I(className="fas fa-seedling fa-2x text-warning mb-2"),
-                                html.H3(f"{unique_species}", className="card-title text-warning fw-bold"),
-                                html.P("🌱 Species Diversity", className="card-text text-muted")
-                            ], className="text-center")
-                        ])
-                    ], className="plant-card border-warning")
-                ], md=3),
-                dbc.Col([
-                    dbc.Card([
-                        dbc.CardBody([
-                            html.Div([
-                                html.I(className="fas fa-heart fa-2x text-danger mb-2"),
-                                html.H3(f"{health_score:.1f}%", className="card-title text-danger fw-bold"),
-                                html.P("💚 Health Score", className="card-text text-muted")
-                            ], className="text-center")
-                        ])
-                    ], className="plant-card border-danger")
-                ], md=3),
-            ], className="mb-4")
-            
-            return html.Div([cards])
-            
+            return [
+                dbc.Card([
+                    dbc.CardBody([
+                        html.H4(selected_city, className="card-title"),
+                        html.P(f"Total Trees: {len(city_data):,}"),
+                        html.P(f"Unique Species: {city_data['species'].nunique():,}"),
+                        html.P(f"Average DBH: {city_data['dbh'].mean():.1f} cm")
+                    ])
+                ], className="mb-3")
+            ]
         elif selected_state:
             state_data = self.df_canopy[self.df_canopy['state'] == selected_state]
-            avg_canopy = state_data['canopy_pct'].mean()
-            counties = len(state_data)
-            max_canopy = state_data['canopy_pct'].max()
-            
-            cards = dbc.Row([
-                dbc.Col([
-                    dbc.Card([
-                        dbc.CardBody([
-                            html.Div([
-                                html.I(className="fas fa-leaf fa-2x text-info mb-2"),
-                                html.H3(f"{avg_canopy:.1f}%", className="card-title text-info fw-bold"),
-                                html.P("🍃 Average Canopy", className="card-text text-muted")
-                            ], className="text-center")
-                        ])
-                    ], className="plant-card border-info")
-                ], md=4),
-                dbc.Col([
-                    dbc.Card([
-                        dbc.CardBody([
-                            html.Div([
-                                html.I(className="fas fa-map fa-2x text-success mb-2"),
-                                html.H3(f"{counties:,}", className="card-title text-success fw-bold"),
-                                html.P("🗺️ Counties", className="card-text text-muted")
-                            ], className="text-center")
-                        ])
-                    ], className="plant-card border-success")
-                ], md=4),
-                dbc.Col([
-                    dbc.Card([
-                        dbc.CardBody([
-                            html.Div([
-                                html.I(className="fas fa-crown fa-2x text-warning mb-2"),
-                                html.H3(f"{max_canopy:.1f}%", className="card-title text-warning fw-bold"),
-                                html.P("👑 Max Canopy", className="card-text text-muted")
-                            ], className="text-center")
-                        ])
-                    ], className="plant-card border-warning")
-                ], md=4),
-            ], className="mb-4")
-            
-            return html.Div([cards])
-            
-        return html.Div([])
+            return [
+                dbc.Card([
+                    dbc.CardBody([
+                        html.H4(selected_state, className="card-title"),
+                        html.P(f"Average Canopy: {state_data['canopy_pct'].mean():.1f}%"),
+                        html.P(f"Counties: {len(state_data):,}"),
+                        html.P(f"Max Canopy: {state_data['canopy_pct'].max():.1f}%")
+                    ])
+                ], className="mb-3")
+            ]
+        return []
 
-    def create_plant_themed_charts(self, df_trees, df_canopy):
-        """Create plant-lover themed charts"""
-        if df_trees.empty:
-            return html.Div([
-                dbc.Alert(
-                    [html.I(className="fas fa-seedling me-2"), "🌱 No tree data available for the selected filters. Try adjusting your selection!"],
-                    color="info",
-                    className="text-center"
-                )
-            ])
+    def create_charts(self, selected_state: Optional[str], selected_city: Optional[str]) -> List[dbc.Col]:
+        """Create charts based on selected filters"""
+        if selected_city:
+            city_data = self.df_trees[self.df_trees['city'] == selected_city]
+            if not city_data.empty:
+                return [
+                    dbc.Col([
+                        html.H4("Species Distribution", className="text-center mb-3"),
+                        self.create_species_chart(city_data)
+                    ], md=6),
+                    dbc.Col([
+                        html.H4("Health Distribution", className="text-center mb-3"),
+                        self.create_health_chart(city_data)
+                    ], md=6)
+                ]
+        elif selected_state:
+            state_data = self.df_canopy[self.df_canopy['state'] == selected_state]
+            if not state_data.empty:
+                return [
+                    dbc.Col([
+                        html.H4(f"Canopy Coverage in {selected_state}", className="text-center mb-3"),
+                        self.create_canopy_chart(state_data)
+                    ], md=12)
+                ]
         
-        # Species distribution chart with plant theme
-        species_counts = df_trees['species'].value_counts().head(10)
-        species_fig = px.bar(
-            x=species_counts.values,
-            y=species_counts.index,
-            orientation='h',
-            title="🌳 Top Tree Species in Your Selection",
-            color=species_counts.values,
-            color_continuous_scale='Greens'
-        )
-        species_fig.update_layout(
-            plot_bgcolor='rgba(0,0,0,0)',
-            paper_bgcolor='rgba(0,0,0,0)',
-            font_family='Poppins',
-            title_font_size=16,
-            title_font_color='#2E7D32'
-        )
-        
-        # DBH distribution with plant theme
-        dbh_fig = px.histogram(
-            df_trees,
-            x='dbh',
-            title="🌲 Tree Trunk Size Distribution (DBH)",
-            color_discrete_sequence=['#4CAF50']
-        )
-        dbh_fig.update_layout(
-            plot_bgcolor='rgba(0,0,0,0)',
-            paper_bgcolor='rgba(0,0,0,0)',
-            font_family='Poppins',
-            title_font_size=16,
-            title_font_color='#2E7D32'
-        )
-        
-        return dbc.Row([
+        # Default overview charts
+        return [
             dbc.Col([
-                dbc.Card([
-                    dbc.CardHeader(html.H5("🌿 Species Diversity", className="mb-0 text-success")),
-                    dbc.CardBody([
-                        dcc.Graph(figure=species_fig)
-                    ])
-                ], className="plant-card")
-            ], md=6),
-            dbc.Col([
-                dbc.Card([
-                    dbc.CardHeader(html.H5("📏 Tree Size Analysis", className="mb-0 text-success")),
-                    dbc.CardBody([
-                        dcc.Graph(figure=dbh_fig)
-                    ])
-                ], className="plant-card")
-            ], md=6)
-        ])
-    
-    def create_plant_themed_map(self, df_trees, df_canopy):
-        """Create plant-lover themed map"""
-        if df_trees.empty:
-            return html.Div([
-                dbc.Alert(
-                    [html.I(className="fas fa-map me-2"), "🗺️ No location data available. Select a region to explore!"],
-                    color="warning",
-                    className="text-center"
-                )
-            ])
-        
-        # Create a simple scatter map with plant theme
-        fig = px.scatter_mapbox(
-            df_trees,
-            lat='latitude',
-            lon='longitude',
-            color='dbh',
-            size='dbh',
-            hover_data=['species', 'dbh'],
-            color_continuous_scale='Greens',
-            title="🌍 Tree Locations & Sizes",
-            mapbox_style='open-street-map',
-            zoom=10
-        )
-        
-        fig.update_layout(
-            height=500,
-            font_family='Poppins',
-            title_font_size=16,
-            title_font_color='#2E7D32'
-        )
-        
-        return dbc.Card([
-            dbc.CardHeader(html.H5("🗺️ Interactive Tree Map", className="mb-0 text-success")),
-            dbc.CardBody([
-                dcc.Graph(figure=fig)
-            ])
-        ], className="plant-card")
+                html.H4("National Overview", className="text-center mb-3"),
+                self.create_overview_chart()
+            ], md=12)
+        ]
 
     def create_species_chart(self, city_data: pd.DataFrame) -> dcc.Graph:
-        """Create species distribution chart"""
-        species_counts = city_data['species'].value_counts().head(10)
-        fig = px.bar(
-            x=species_counts.values,
-            y=species_counts.index,
-            orientation='h',
-            title='Top 10 Species Distribution',
-            labels={'x': 'Count', 'y': 'Species'}
-        )
-        fig.update_layout(height=400)
-        return dcc.Graph(figure=fig)
+        """Create species distribution chart with error handling"""
+        try:
+            if city_data.empty:
+                return self._create_empty_chart("No species data available")
+                
+            species_counts = city_data['species'].value_counts().head(10)
+            if species_counts.empty:
+                return self._create_empty_chart("No species found")
+                
+            fig = px.bar(
+                x=species_counts.values,
+                y=species_counts.index,
+                orientation='h',
+                title='Top 10 Species Distribution',
+                labels={'x': 'Count', 'y': 'Species'},
+                color_discrete_sequence=['#28a745']
+            )
+            fig.update_layout(
+                height=400,
+                font_family="Arial, sans-serif",
+                title_x=0.5
+            )
+            return dcc.Graph(figure=fig)
+        except Exception as e:
+            logger.error(f"Error creating species chart: {e}")
+            return self._create_error_chart("Error loading species data")
 
     def create_health_chart(self, city_data: pd.DataFrame) -> dcc.Graph:
-        """Create health distribution chart"""
-        health_counts = city_data['health'].value_counts()
-        fig = px.pie(
-            values=health_counts.values,
-            names=health_counts.index,
-            title='Tree Health Distribution'
+        """Create health distribution chart with error handling"""
+        try:
+            if city_data.empty:
+                return self._create_empty_chart("No health data available")
+                
+            health_counts = city_data['health'].value_counts()
+            if health_counts.empty:
+                return self._create_empty_chart("No health data found")
+                
+            fig = px.pie(
+                values=health_counts.values,
+                names=health_counts.index,
+                title='Tree Health Distribution',
+                color_discrete_map={
+                    'Good': '#28a745',
+                    'Fair': '#ffc107', 
+                    'Poor': '#dc3545'
+                }
+            )
+            fig.update_layout(
+                height=400,
+                font_family="Arial, sans-serif",
+                title_x=0.5
+            )
+            return dcc.Graph(figure=fig)
+        except Exception as e:
+            logger.error(f"Error creating health chart: {e}")
+            return self._create_error_chart("Error loading health data")
+
+    def create_canopy_chart(self, state_data: pd.DataFrame) -> dcc.Graph:
+        """Create canopy coverage chart for a state with error handling"""
+        try:
+            if state_data.empty:
+                return self._create_empty_chart("No canopy data available")
+                
+            fig = px.histogram(
+                state_data,
+                x='canopy_pct',
+                nbins=20,
+                title='Canopy Coverage Distribution',
+                labels={'canopy_pct': 'Canopy Coverage (%)', 'count': 'Number of Counties'},
+                color_discrete_sequence=['#28a745']
+            )
+            fig.update_layout(
+                height=400,
+                font_family="Arial, sans-serif",
+                title_x=0.5
+            )
+            return dcc.Graph(figure=fig)
+        except Exception as e:
+            logger.error(f"Error creating canopy chart: {e}")
+            return self._create_error_chart("Error loading canopy data")
+
+    def create_overview_chart(self) -> dcc.Graph:
+        """Create national overview chart with error handling"""
+        try:
+            # Create overview from actual data if available
+            if self._data_loaded and self.df_trees is not None and not self.df_trees.empty:
+                state_counts = self.df_trees.groupby('city').size().head(10)
+                fig = px.bar(
+                    x=state_counts.values,
+                    y=state_counts.index,
+                    orientation='h',
+                    title='Tree Count by Region (Top 10)',
+                    labels={'x': 'Number of Trees', 'y': 'Region'},
+                    color_discrete_sequence=['#28a745']
+                )
+            else:
+                # Fallback sample data
+                overview_data = pd.DataFrame({
+                    'State': ['CA', 'TX', 'FL', 'NY', 'PA'],
+                    'Trees': [150000, 120000, 100000, 95000, 85000]
+                })
+                fig = px.bar(
+                    overview_data,
+                    x='State',
+                    y='Trees',
+                    title='Tree Count by State (Sample Data)',
+                    labels={'Trees': 'Number of Trees'},
+                    color_discrete_sequence=['#28a745']
+                )
+            
+            fig.update_layout(
+                height=400,
+                font_family="Arial, sans-serif",
+                title_x=0.5
+            )
+            return dcc.Graph(figure=fig)
+        except Exception as e:
+            logger.error(f"Error creating overview chart: {e}")
+            return self._create_error_chart("Error loading overview data")
+
+    def _create_empty_chart(self, message: str) -> dcc.Graph:
+        """Create an empty chart with a message"""
+        fig = go.Figure()
+        fig.add_annotation(
+            text=message,
+            xref="paper", yref="paper",
+            x=0.5, y=0.5,
+            showarrow=False,
+            font=dict(size=16, color="gray")
         )
-        fig.update_layout(height=400)
+        fig.update_layout(
+            height=400,
+            xaxis={"visible": False},
+            yaxis={"visible": False},
+            annotations=[{"text": message, "showarrow": False}]
+        )
+        return dcc.Graph(figure=fig)
+
+    def _create_error_chart(self, message: str) -> dcc.Graph:
+        """Create an error chart with a message"""
+        fig = go.Figure()
+        fig.add_annotation(
+            text=f"⚠️ {message}",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5,
+            showarrow=False,
+            font=dict(size=16, color="red")
+        )
+        fig.update_layout(
+            height=400,
+            xaxis={"visible": False},
+            yaxis={"visible": False}
+        )
         return dcc.Graph(figure=fig)
 
     def create_map(
         self, selected_state: Optional[str], selected_city: Optional[str],
         canopy_range: List[float]
     ) -> dcc.Graph:
-        """Create the interactive map"""
-        if selected_city:
-            # City-level tree point map
-            city_data = self.df_trees[self.df_trees['city'] == selected_city]
-            fig = px.scatter_mapbox(
-                city_data,
-                lat='latitude',
-                lon='longitude',
-                color='health',
-                hover_data=['species', 'dbh'],
-                zoom=11,
-                height=600,
-                title=f'Tree Locations in {selected_city}'
-            )
-        elif selected_state:
-            # State-level canopy choropleth
-            state_data = self.df_canopy[
-                (self.df_canopy['state'] == selected_state) &
-                (self.df_canopy['canopy_pct'] >= canopy_range[0]) &
-                (self.df_canopy['canopy_pct'] <= canopy_range[1])
-            ]
-            fig = px.choropleth_mapbox(
-                state_data,
-                geojson=None,  # TODO: Add actual county geometries
-                locations=state_data.index,
-                color='canopy_pct',
-                hover_name='county',
-                color_continuous_scale="Greens",
-                range_color=[0, 100],
-                zoom=6,
-                height=600,
-                title=f'Canopy Coverage in {selected_state}'
-            )
-        else:
-            # Default US map
-            fig = go.Figure(go.Scattermapbox())
-            fig.update_layout(height=600)
+        """Create the interactive map with comprehensive error handling"""
+        try:
+            mapbox_token = os.getenv('MAPBOX_TOKEN')
+            mapbox_style = "open-street-map"  # Default fallback style
+            
+            if selected_city and self.df_trees is not None:
+                # City-level tree point map
+                city_data = self.df_trees[self.df_trees['city'] == selected_city]
+                if not city_data.empty and 'latitude' in city_data.columns and 'longitude' in city_data.columns:
+                    # Filter out invalid coordinates
+                    city_data = city_data[
+                        (city_data['latitude'].notna()) & 
+                        (city_data['longitude'].notna()) &
+                        (city_data['latitude'].between(-90, 90)) &
+                        (city_data['longitude'].between(-180, 180))
+                    ]
+                    
+                    if not city_data.empty:
+                        fig = px.scatter_mapbox(
+                            city_data,
+                            lat='latitude',
+                            lon='longitude',
+                            color='health',
+                            hover_data={'species': True, 'dbh': True, 'latitude': False, 'longitude': False},
+                            zoom=8,
+                            height=600,
+                            title=f'Tree Locations in {selected_city}',
+                            color_discrete_map={
+                                'Good': '#28a745',
+                                'Fair': '#ffc107',
+                                'Poor': '#dc3545'
+                            }
+                        )
+                        # Center the map on the data
+                        fig.update_layout(
+                            mapbox_center_lat=city_data['latitude'].mean(),
+                            mapbox_center_lon=city_data['longitude'].mean()
+                        )
+                    else:
+                        return self._create_empty_map("No valid coordinates found for this city")
+                else:
+                    return self._create_empty_map(f"No data available for {selected_city}")
+                    
+            elif selected_state and self.df_canopy is not None:
+                # State-level canopy visualization
+                state_data = self.df_canopy[
+                    (self.df_canopy['state'] == selected_state) &
+                    (self.df_canopy['canopy_pct'] >= canopy_range[0]) &
+                    (self.df_canopy['canopy_pct'] <= canopy_range[1])
+                ]
+                
+                if not state_data.empty:
+                    # Create a simple scatter plot for counties (since we don't have actual geometries)
+                    # Generate random coordinates within US bounds for visualization
+                    np.random.seed(42)  # For reproducible results
+                    state_coords = self._get_state_coordinates(selected_state)
+                    
+                    lats = np.random.uniform(
+                        state_coords['lat'] - 2, 
+                        state_coords['lat'] + 2, 
+                        len(state_data)
+                    )
+                    lons = np.random.uniform(
+                        state_coords['lon'] - 3, 
+                        state_coords['lon'] + 3, 
+                        len(state_data)
+                    )
+                    
+                    fig = px.scatter_mapbox(
+                        state_data,
+                        lat=lats,
+                        lon=lons,
+                        color='canopy_pct',
+                        hover_name='county',
+                        color_continuous_scale="Greens",
+                        range_color=[0, 100],
+                        zoom=6,
+                        height=600,
+                        title=f'Canopy Coverage in {selected_state}',
+                        labels={'color': 'Canopy %'}
+                    )
+                    fig.update_layout(
+                        mapbox_center_lat=state_coords['lat'],
+                        mapbox_center_lon=state_coords['lon']
+                    )
+                else:
+                    return self._create_empty_map(f"No data available for {selected_state} in the selected range")
+            else:
+                # Default US overview map
+                fig = self._create_default_us_map()
 
+            # Configure mapbox
+            fig.update_layout(
+                mapbox_style=mapbox_style,
+                mapbox_accesstoken=mapbox_token,
+                font_family="Arial, sans-serif",
+                title_x=0.5,
+                margin={"r":0,"t":40,"l":0,"b":0}
+            )
+            
+            return dcc.Graph(figure=fig)
+            
+        except Exception as e:
+            logger.error(f"Error creating map: {e}")
+            return self._create_empty_map("Error loading map data")
+
+    def _get_state_coordinates(self, state: str) -> Dict[str, float]:
+        """Get approximate center coordinates for US states"""
+        state_coords = {
+            'CA': {'lat': 36.7783, 'lon': -119.4179},
+            'TX': {'lat': 31.9686, 'lon': -99.9018},
+            'FL': {'lat': 27.7663, 'lon': -81.6868},
+            'NY': {'lat': 42.1657, 'lon': -74.9481},
+            'PA': {'lat': 41.2033, 'lon': -77.1945},
+            'IL': {'lat': 40.3363, 'lon': -89.0022},
+            'OH': {'lat': 40.3888, 'lon': -82.7649},
+            'GA': {'lat': 33.76, 'lon': -84.39},
+            'NC': {'lat': 35.771, 'lon': -78.638},
+            'MI': {'lat': 44.182, 'lon': -84.506}
+        }
+        return state_coords.get(state, {'lat': 39.8283, 'lon': -98.5795})  # Default to US center
+
+    def _create_default_us_map(self) -> go.Figure:
+        """Create a default US map with sample data"""
+        # Sample major US cities
+        cities_data = pd.DataFrame({
+            'city': ['New York', 'Los Angeles', 'Chicago', 'Houston', 'Phoenix'],
+            'lat': [40.7128, 34.0522, 41.8781, 29.7604, 33.4484],
+            'lon': [-74.0060, -118.2437, -87.6298, -95.3698, -112.0740],
+            'trees': [50000, 45000, 40000, 35000, 30000]
+        })
+        
+        fig = px.scatter_mapbox(
+            cities_data,
+            lat='lat',
+            lon='lon',
+            size='trees',
+            hover_name='city',
+            hover_data={'trees': True, 'lat': False, 'lon': False},
+            zoom=3,
+            height=600,
+            title='Major US Cities Tree Distribution (Sample)',
+            color_discrete_sequence=['#28a745']
+        )
+        
         fig.update_layout(
-            mapbox_style="carto-positron",
-            mapbox_accesstoken=os.getenv('MAPBOX_TOKEN')
+            mapbox_center_lat=39.8283,
+            mapbox_center_lon=-98.5795
+        )
+        
+        return fig
+
+    def _create_empty_map(self, message: str) -> dcc.Graph:
+        """Create an empty map with a message"""
+        fig = go.Figure()
+        fig.add_annotation(
+            text=message,
+            xref="paper", yref="paper",
+            x=0.5, y=0.5,
+            showarrow=False,
+            font=dict(size=16, color="gray")
+        )
+        fig.update_layout(
+            height=600,
+            xaxis={"visible": False},
+            yaxis={"visible": False}
         )
         return dcc.Graph(figure=fig)
 
 # Initialize dashboard
-dashboard = PlantsWorldDashboard()
+dashboard = TreeDashboard()
 
 # Main app layout
 app.layout = dashboard.create_layout()
 
-# Setup callbacks will be added here
-
-# Callback to update stats
+# Callback to update summary cards
 @app.callback(
-    [Output("total-species", "children"),
-     Output("total-families", "children"),
-     Output("total-hotspots", "children"),
-     Output("threatened-species", "children")],
-    [Input("family-dropdown", "value"),
-     Input("conservation-filter", "value")]
+    Output("summary-cards", "children"),
+    [Input("state-dropdown", "value"),
+     Input("city-dropdown", "value")],
+    prevent_initial_call=False
 )
-def update_stats(family, conservation):
-    # Calculate stats from sample datasets
-    plant_families = dashboard.datasets.get('plant_families', pd.DataFrame())
-    biodiversity_hotspots = dashboard.datasets.get('biodiversity_hotspots', pd.DataFrame())
-    conservation_status = dashboard.datasets.get('conservation_status', pd.DataFrame())
-    
-    total_species = plant_families['estimated_species'].sum() if not plant_families.empty else 0
-    total_families = len(plant_families) if not plant_families.empty else 0
-    total_hotspots = len(biodiversity_hotspots) if not biodiversity_hotspots.empty else 0
-    threatened = len(conservation_status[conservation_status['conservation_status'].isin(['Critically Endangered', 'Endangered', 'Vulnerable'])]) if not conservation_status.empty else 0
-    
-    return f"{total_species:,}", str(total_families), str(total_hotspots), str(threatened)
-
-# Callback to update biodiversity map
-@app.callback(
-    Output("biodiversity-map", "figure"),
-    [Input("family-dropdown", "value"),
-     Input("conservation-filter", "value")]
-)
-def update_biodiversity_map(family, conservation):
-    # Get biodiversity hotspots data
-    hotspots = dashboard.datasets.get('biodiversity_hotspots', pd.DataFrame())
-    
-    if hotspots.empty:
-        # Create empty map if no data
-        fig = go.Figure(go.Scattermapbox())
-        fig.update_layout(
-            mapbox_style="carto-positron",
-            mapbox_zoom=1,
-            mapbox_center={"lat": 0, "lon": 0},
-            margin={"r": 0, "t": 30, "l": 0, "b": 0},
-            height=500
-        )
-        return fig
-    
-    # Create biodiversity hotspots map
-    fig = px.scatter_mapbox(
-        hotspots,
-        lat='latitude',
-        lon='longitude',
-        size='endemic_species',
-        color='threat_level',
-        hover_name='hotspot_name',
-        hover_data=['country', 'endemic_species'],
-        color_discrete_map={
-            'Critical': '#d32f2f',
-            'High': '#f57c00',
-            'Medium': '#fbc02d',
-            'Low': '#388e3c'
-        },
-        zoom=1,
-        title="Global Biodiversity Hotspots"
-    )
-    
-    fig.update_layout(
-        mapbox_style="carto-positron",
-        margin={"r": 0, "t": 30, "l": 0, "b": 0},
-        height=500
-    )
-    
-    return fig
-
-# Callback to update plant families chart
-@app.callback(
-    Output("families-chart", "figure"),
-    [Input("family-dropdown", "value")]
-)
-def update_families_chart(selected_family):
-    plant_families = dashboard.datasets.get('plant_families', pd.DataFrame())
-    
-    if plant_families.empty:
-        return go.Figure()
-    
-    fig = px.bar(
-        plant_families,
-        x='family',
-        y='estimated_species',
-        title='Plant Families by Species Count',
-        color='estimated_species',
-        color_continuous_scale='Greens'
-    )
-    
-    fig.update_layout(
-        xaxis_title='Plant Family',
-        yaxis_title='Estimated Species Count',
-        height=400
-    )
-    
-    return fig
-
-# Callback to update conservation chart
-@app.callback(
-    Output("conservation-chart", "figure"),
-    [Input("conservation-filter", "value")]
-)
-def update_conservation_chart(conservation_filter):
-    conservation_data = dashboard.datasets.get('conservation_status', pd.DataFrame())
-    
-    if conservation_data.empty:
-        return go.Figure()
-    
-    status_counts = conservation_data['conservation_status'].value_counts()
-    
-    fig = px.pie(
-        values=status_counts.values,
-        names=status_counts.index,
-        title='Conservation Status Distribution',
-        color_discrete_map={
-            'Critically Endangered': '#d32f2f',
-            'Endangered': '#f57c00',
-            'Vulnerable': '#fbc02d',
-            'Least Concern': '#388e3c'
-        }
-    )
-    
-    fig.update_layout(height=400)
-    
-    return fig
-
-# Callback to populate family dropdown
-@app.callback(
-    Output("family-dropdown", "options"),
-    [Input("family-dropdown", "id")]  # Dummy input to trigger on load
-)
-def populate_family_dropdown(_):
-    plant_families = dashboard.datasets.get('plant_families', pd.DataFrame())
-    
-    if plant_families.empty:
-        return []
-    
-    return [{'label': row['common_name'], 'value': row['family']} 
-            for _, row in plant_families.iterrows()]
-
-# Callback to update data table
-@app.callback(
-    Output("data-table-container", "children"),
-    [Input("btn-families", "n_clicks"),
-     Input("btn-conservation", "n_clicks"),
-     Input("btn-hotspots", "n_clicks")]
-)
-def update_data_table(btn_families, btn_conservation, btn_hotspots):
-    ctx = dash.callback_context
-    
-    if not ctx.triggered:
-        # Default to plant families
-        dataset = dashboard.datasets.get('plant_families', pd.DataFrame())
-        title = "Plant Families Data"
-    else:
-        button_id = ctx.triggered[0]['prop_id'].split('.')[0]
-        
-        if button_id == "btn-families":
-            dataset = dashboard.datasets.get('plant_families', pd.DataFrame())
-            title = "Plant Families Data"
-        elif button_id == "btn-conservation":
-            dataset = dashboard.datasets.get('conservation_status', pd.DataFrame())
-            title = "Conservation Status Data"
-        elif button_id == "btn-hotspots":
-            dataset = dashboard.datasets.get('biodiversity_hotspots', pd.DataFrame())
-            title = "Biodiversity Hotspots Data"
+def update_summary_cards(state, city):
+    try:
+        cards = dashboard.create_summary_cards(state, city)
+        if cards:
+            return dbc.Row([dbc.Col(card, md=4) for card in cards[:3]])
         else:
-            dataset = pd.DataFrame()
-            title = "No Data Available"
-    
-    if dataset.empty:
-        return html.Div([
-            html.H5(title, className="mb-3"),
-            html.P("No data available for this category.", className="text-muted")
-        ])
-    
-    return html.Div([
-        html.H5(title, className="mb-3"),
-        dash_table.DataTable(
-            data=dataset.to_dict('records'),
-            columns=[{"name": i, "id": i} for i in dataset.columns],
-            style_cell={'textAlign': 'left', 'padding': '10px'},
-            style_header={'backgroundColor': '#28a745', 'color': 'white', 'fontWeight': 'bold'},
-            style_data={'backgroundColor': '#f8f9fa'},
-            page_size=10,
-            sort_action="native",
-            filter_action="native"
+            return dbc.Alert(
+                "Select a state or city to view summary statistics.",
+                color="info",
+                className="text-center"
+            )
+    except Exception as e:
+        logger.error(f"Error updating summary cards: {e}")
+        return dbc.Alert(
+            "Error loading summary data. Please try again.",
+            color="danger",
+            className="text-center"
         )
-    ])
 
-# Callback to update species details
+# Callback to update charts
 @app.callback(
-    Output("species-details", "children"),
-    [Input("family-dropdown", "value"),
-     Input("conservation-filter", "value")]
+    Output("charts-container", "children"),
+    [Input("state-dropdown", "value"),
+     Input("city-dropdown", "value")],
+    prevent_initial_call=False
 )
-def update_species_details(selected_family, conservation_filter):
-    if not selected_family:
-        return html.Div([
-            html.P("Please select a plant family to explore species details.", 
-                   className="text-muted text-center mt-4")
-        ])
-    
-    plant_families = dashboard.datasets.get('plant_families', pd.DataFrame())
-    conservation_data = dashboard.datasets.get('conservation_status', pd.DataFrame())
-    
-    if plant_families.empty:
-        return html.Div([
-            html.P("No plant family data available.", className="text-muted text-center mt-4")
-        ])
-    
-    # Get selected family info
-    family_info = plant_families[plant_families['family'] == selected_family]
-    
-    if family_info.empty:
-        return html.Div([
-            html.P("Family information not found.", className="text-muted text-center mt-4")
-        ])
-    
-    family_row = family_info.iloc[0]
-    
-    # Filter conservation data if applicable
-    filtered_conservation = conservation_data
-    if conservation_filter != 'all' and not conservation_data.empty:
-        filtered_conservation = conservation_data[
-            conservation_data['conservation_status'] == conservation_filter
-        ]
-    
-    return dbc.Row([
-        dbc.Col([
-            dbc.Card([
-                dbc.CardHeader([
-                    html.H5(f"🌿 {family_row['common_name']} ({family_row['family']})", className="mb-0")
-                ]),
-                dbc.CardBody([
-                    html.P(f"**Estimated Species:** {family_row['estimated_species']:,}", className="mb-2"),
-                    html.P(f"**Distribution:** {family_row['distribution']}", className="mb-2"),
-                    html.Hr(),
-                    html.H6("Family Characteristics:", className="fw-bold"),
-                    html.Ul([
-                        html.Li("Diverse morphological features"),
-                        html.Li("Wide ecological adaptations"),
-                        html.Li("Important economic and ecological value")
-                    ])
-                ])
-            ], className="shadow-sm")
-        ], md=6),
-        dbc.Col([
-            dbc.Card([
-                dbc.CardHeader([
-                    html.H5("🔬 Research Insights", className="mb-0")
-                ]),
-                dbc.CardBody([
-                    html.P("**Recent Studies:**", className="fw-bold mb-2"),
-                    html.Ul([
-                        html.Li("Phylogenetic relationships within the family"),
-                        html.Li("Climate change adaptation strategies"),
-                        html.Li("Conservation genomics applications")
-                    ]),
-                    html.Hr(),
-                    html.P("**Conservation Priority:**", className="fw-bold mb-2"),
-                    dbc.Badge(
-                        "High" if family_row['estimated_species'] > 10000 else "Medium",
-                        color="danger" if family_row['estimated_species'] > 10000 else "warning",
-                        className="me-2"
-                    ),
-                    html.P("Based on species diversity and threat assessment", 
-                           className="text-muted small mt-2")
-                ])
-            ], className="shadow-sm")
-        ], md=6)
-    ])
+def update_charts(state, city):
+    try:
+        chart_columns = dashboard.create_charts(state, city)
+        if chart_columns:
+            return dbc.Row(chart_columns)
+        else:
+            return dbc.Alert(
+                "No data available for the selected filters.",
+                color="warning",
+                className="text-center"
+            )
+    except Exception as e:
+        logger.error(f"Error updating charts: {e}")
+        return dbc.Alert(
+            "Error loading chart data. Please try again.",
+            color="danger",
+            className="text-center"
+        )
+
+# Callback to update map
+@app.callback(
+    Output("map-container", "children"),
+    [Input("state-dropdown", "value"),
+     Input("city-dropdown", "value"),
+     Input("canopy-slider", "value")],
+    prevent_initial_call=False
+)
+def update_map(state, city, canopy_range):
+    try:
+        if canopy_range is None:
+            canopy_range = [0, 100]
+        return dashboard.create_map(state, city, canopy_range)
+    except Exception as e:
+        logger.error(f"Error updating map: {e}")
+        return dbc.Alert(
+            "Error loading map data. Please try again.",
+            color="danger",
+            className="text-center"
+        )
+
+# Callback to update city options based on selected state
+@app.callback(
+    Output("city-dropdown", "options"),
+    [Input("state-dropdown", "value")],
+    prevent_initial_call=False
+)
+def update_city_options(selected_state):
+    try:
+        if selected_state and dashboard.df_trees is not None:
+            # Filter cities by state if we have mapping data
+            # For now, return all cities since we don't have state-city mapping
+            return dashboard.city_options
+        return dashboard.city_options
+    except Exception as e:
+        logger.error(f"Error updating city options: {e}")
+        return []
 
 if __name__ == '__main__':
-    # Validate configuration
-    config.validate_config()
-    
-    # Initialize API if enabled
-    if config.INTEGRATION_CONFIG['api_enabled']:
-        try:
-            import api
-            api.init_api(app)
-            logging.info("API initialized successfully")
-        except ImportError as e:
-            logging.warning(f"API module not available: {e}")
-        except Exception as e:
-            logging.error(f"Failed to initialize API: {e}")
-    
-    # Run the app
-    app.run(
-        debug=config.DEBUG,
-        host=config.HOST,
-        port=config.PORT
-    )
+    try:
+        # Get configuration from environment
+        debug_mode = os.getenv('DEBUG', 'True').lower() == 'true'
+        host = os.getenv('HOST', '0.0.0.0')
+        port = int(os.getenv('PORT', 8050))
+        
+        logger.info(f"Starting dashboard server on {host}:{port} (debug={debug_mode})")
+        
+        # Start the app
+        app.run(
+            debug=debug_mode, 
+            host=host, 
+            port=port,
+            dev_tools_hot_reload=debug_mode,
+            dev_tools_props_check=debug_mode
+        )
+    except Exception as e:
+        logger.error(f"Failed to start application: {e}")
+        print(f"Error starting application: {e}")
+        print("Please check your environment configuration and try again.")
