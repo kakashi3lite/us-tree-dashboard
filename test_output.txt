@@ -1,0 +1,20 @@
+Python version: 3.13.2 | packaged by Anaconda, Inc. | (main, Feb  6 2025, 18:49:14) [MSC v.1929 64 bit (AMD64)]
+Current working directory: C:\Users\Swanand\CascadeProjects\us-tree-dashboard
+Python path: ['C:\\Users\\Swanand\\CascadeProjects\\us-tree-dashboard', 'C:\\Users\\Swanand\\anaconda3\\python.exe', 'C:\\Users\\Swanand\\miniconda3\\python313.zip']
+
+=== Testing imports ===
+Traceback (most recent call last):
+  File "C:\Users\Swanand\CascadeProjects\us-tree-dashboard\test_app.py", line 15, in <module>
+    import dash
+ModuleNotFoundError: No module named 'dash'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\Swanand\CascadeProjects\us-tree-dashboard\test_app.py", line 44, in <module>
+    print(f"\u274c Import error: {e}")
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Swanand\miniconda3\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u274c' in position 0: character maps to <undefined>

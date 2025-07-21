@@ -1,0 +1,21 @@
+C:\Users\Swanand\CascadeProjects\us-tree-dashboard\test_app.py:14: DeprecationWarning: Parsing dates involving a day of month without a year specified is ambiguious
+and fails to parse leap day. The default behavior will change in Python 3.15
+to either always raise an exception or to use a different default year (TBD).
+To avoid trouble, add a specific year to the input & format.
+See https://github.com/python/cpython/issues/70647.
+  import dash
+Python version: 3.13.2 | packaged by Anaconda, Inc. | (main, Feb  6 2025, 18:49:14) [MSC v.1929 64 bit (AMD64)]
+Current working directory: C:\Users\Swanand\CascadeProjects\us-tree-dashboard
+
+=== Testing imports ===
+[OK] Dash imported successfully
+[OK] Pandas imported successfully
+[OK] Numpy imported successfully
+[OK] Plotly imported successfully
+[OK] Charitable orgs imported successfully (3 orgs)
+
+=== Testing app creation ===
+[OK] Dash app created successfully
+
+=== Testing data generation ===
+[ERROR] Import error: No module named 'dash_bootstrap_components'
