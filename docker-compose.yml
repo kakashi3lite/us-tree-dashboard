@@ -4,4 +4,6 @@ services:
     build: .
     ports:
       - '8050:8050'
-    command: python app.py
+    command: python app_with_enhancex_integration.py
+    volumes:
+      - ./data:/app/data
