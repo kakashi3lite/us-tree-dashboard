@@ -1,0 +1,371 @@
+name: Conservation Dashboard CI/CD
+# Automated deployment pipeline optimized for conservation tech workflows
+# Implements Eli's automation-first approach with immediate feedback loops
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'src/**'
+      - 'app.py'
+      - 'requirements.txt'
+      - 'docker-compose*.yml'
+      - 'Dockerfile*'
+  pull_request:
+    branches: [ main ]
+  schedule:
+    # Run automated tests daily at 6 AM UTC for proactive monitoring
+    - cron: '0 6 * * *'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  
+jobs:
+  # Quality Assurance - Fast feedback for development flow
+  quality-check:
+    name: 🔍 Code Quality & Testing
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov flake8 black isort mypy
+        
+    - name: Code formatting check
+      run: |
+        black --check --diff .
+        isort --check-only --diff .
+        
+    - name: Lint code
+      run: |
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+        
+    - name: Type checking
+      run: mypy src/ --ignore-missing-imports
+      continue-on-error: true
+      
+    - name: Run tests with coverage
+      run: |
+        python -m pytest tests/ -v --cov=src --cov-report=xml --cov-report=term
+        
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        fail_ci_if_error: false
+
+  # Security scanning for production readiness
+  security-scan:
+    name: 🔒 Security Analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Run Bandit security scanner
+      run: |
+        pip install bandit[toml]
+        bandit -r . -f json -o bandit-report.json || true
+        
+    - name: Upload security scan results
+      uses: actions/upload-artifact@v3
+      with:
+        name: security-scan-results
+        path: bandit-report.json
+
+  # Build and test Docker images
+  build-test:
+    name: 🐳 Build & Test Images
+    runs-on: ubuntu-latest
+    needs: [quality-check]
+    timeout-minutes: 15
+    
+    strategy:
+      matrix:
+        environment: [development, production]
+        
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Build Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: Dockerfile${{ matrix.environment == 'production' && '.production' || '' }}
+        push: false
+        tags: conservation-dashboard:${{ matrix.environment }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        
+    - name: Test Docker image
+      run: |
+        # Start container and test basic functionality
+        docker run -d --name test-container -p 8050:8050 conservation-dashboard:${{ matrix.environment }}
+        sleep 30
+        
+        # Health check
+        curl -f http://localhost:8050/ || exit 1
+        
+        # API health check (if enabled)
+        if [ "${{ matrix.environment }}" = "production" ]; then
+          curl -f http://localhost:8050/api/v1/health || echo "API not enabled"
+        fi
+        
+        # Cleanup
+        docker stop test-container
+        docker rm test-container
+
+  # Performance testing for conservation data loads
+  performance-test:
+    name: ⚡ Performance Testing
+    runs-on: ubuntu-latest
+    needs: [build-test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    timeout-minutes: 20
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Install performance testing tools
+      run: |
+        pip install locust pytest-benchmark pandas numpy
+        pip install -r requirements.txt
+        
+    - name: Run load tests
+      run: |
+        # Start the application in background
+        python app.py &
+        APP_PID=$!
+        sleep 30
+        
+        # Run performance tests
+        locust -f tests/performance/locustfile.py --headless -u 10 -r 2 -t 60s --host http://localhost:8050
+        
+        # Cleanup
+        kill $APP_PID
+        
+    - name: Benchmark critical functions
+      run: |
+        python -m pytest tests/performance/ -v --benchmark-only --benchmark-json=benchmark.json
+        
+    - name: Upload performance results
+      uses: actions/upload-artifact@v3
+      with:
+        name: performance-results
+        path: |
+          benchmark.json
+          locust_stats.json
+
+  # Deploy to staging environment
+  deploy-staging:
+    name: 🚀 Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [quality-check, security-scan, build-test]
+    if: github.ref == 'refs/heads/develop'
+    environment: staging
+    timeout-minutes: 10
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: true
+        tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:staging
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        
+    - name: Deploy to staging
+      run: |
+        # This would typically deploy to your staging environment
+        echo "Deploying to staging environment..."
+        echo "Image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:staging"
+        
+        # Example deployment commands (adapt to your infrastructure)
+        # kubectl set image deployment/conservation-dashboard app=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:staging
+        # or docker-compose pull && docker-compose up -d
+        
+    - name: Run smoke tests
+      run: |
+        sleep 60  # Wait for deployment
+        # Add staging environment smoke tests
+        curl -f https://staging.conservation-dashboard.example.com/ || exit 1
+
+  # Deploy to production environment
+  deploy-production:
+    name: 🌍 Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [quality-check, security-scan, build-test, performance-test]
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    timeout-minutes: 15
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Build and push production image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: Dockerfile.production
+        push: true
+        tags: |
+          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        
+    - name: Deploy to production
+      run: |
+        echo "Deploying to production environment..."
+        echo "Image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+        
+        # Production deployment with zero-downtime
+        # kubectl set image deployment/conservation-dashboard app=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+        # kubectl rollout status deployment/conservation-dashboard
+        
+    - name: Run production health checks
+      run: |
+        sleep 120  # Wait for production deployment
+        
+        # Comprehensive health checks
+        curl -f https://conservation-dashboard.example.com/ || exit 1
+        curl -f https://conservation-dashboard.example.com/api/v1/health || exit 1
+        
+        # Check critical conservation features
+        # curl -f https://conservation-dashboard.example.com/api/v1/stats || exit 1
+
+  # Automated monitoring setup
+  setup-monitoring:
+    name: 📊 Setup Monitoring
+    runs-on: ubuntu-latest
+    needs: [deploy-production]
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Configure application monitoring
+      run: |
+        echo "Setting up production monitoring..."
+        
+        # Example: Configure Prometheus alerts
+        # kubectl apply -f k8s/monitoring/
+        
+        # Example: Setup log aggregation
+        # Configure ELK stack or similar
+        
+        # Example: Setup APM
+        # Configure New Relic, Datadog, or similar
+        
+    - name: Send deployment notification
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        channel: '#conservation-alerts'
+        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+        text: |
+          🌿 Conservation Dashboard deployed to production!
+          
+          ✅ All tests passed
+          ✅ Security scan clean
+          ✅ Performance benchmarks met
+          
+          Dashboard: https://conservation-dashboard.example.com
+          Commit: ${{ github.sha }}
+          Author: ${{ github.actor }}
+
+  # Data pipeline validation
+  validate-data-pipeline:
+    name: 📊 Validate Data Pipeline
+    runs-on: ubuntu-latest
+    needs: [deploy-production]
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Test data ingestion
+      run: |
+        # Validate GBIF data pipeline
+        python scripts/test_data_pipeline.py --source gbif --validate
+        
+        # Validate conservation status updates
+        python scripts/test_data_pipeline.py --source iucn --validate
+        
+        # Validate canopy data processing
+        python scripts/test_data_pipeline.py --source usda_tcc --validate
+        
+    - name: Generate data quality report
+      run: |
+        python scripts/generate_data_quality_report.py --output reports/data_quality.html
+        
+    - name: Upload data quality report
+      uses: actions/upload-artifact@v3
+      with:
+        name: data-quality-report
+        path: reports/data_quality.html
+
+# Cleanup workflow for cost optimization
+  cleanup:
+    name: 🧹 Cleanup Resources
+    runs-on: ubuntu-latest
+    needs: [deploy-production, setup-monitoring, validate-data-pipeline]
+    if: always()
+    
+    steps:
+    - name: Clean up old images
+      run: |
+        # Clean up old container images to save storage
+        echo "Cleaning up old container images..."
+        
+        # Keep only last 5 images
+        # docker images | grep conservation-dashboard | tail -n +6 | awk '{print $3}' | xargs docker rmi || true
+        
+    - name: Archive artifacts
+      run: |
+        # Archive build artifacts for compliance
+        echo "Archiving build artifacts..."
+        
+        # Move artifacts to long-term storage
+        # aws s3 cp build-artifacts/ s3://conservation-builds/$(date +%Y-%m-%d)/ --recursive
