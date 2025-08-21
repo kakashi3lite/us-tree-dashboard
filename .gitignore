@@ -39,3 +39,13 @@ data/*
 !data/.gitkeep
 gdrive_creds/
 gdrive_token.json
+.gitleaks-cache/
+token.json
+*.pem
+*.key
+*.pfx
+secrets/*.json
+secrets/*.yaml
+*.env.local
+env.local
+

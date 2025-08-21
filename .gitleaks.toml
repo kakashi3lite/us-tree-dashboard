@@ -1,0 +1,29 @@
+[extend]
+path = ""
+
+[rules]
+
+[[rules]]
+id = "generic-api-key"
+description = "Generic API Key"
+regex = '''(?i)api[_-]?key['"=:\s]{0,10}[a-z0-9]{16,45}'''
+secretGroup = 1
+entropy = 3.5
+
+[[rules]]
+id = "password-assignment"
+description = "Possible hardcoded password"
+regex = '''(?i)(password|passwd|pwd)['"=:\s]{1,20}[^\s]{6,}'''
+secretGroup = 0
+
+[allowlist]
+description = "Global allow list"
+paths = [
+  "tests/",
+  "README",
+  "README.md"
+]
+regexes = [
+  '''(?i)your(_|-)?(secret|token|key|password)_?here''',
+  '''(?i)example(_|-)?(secret|token|key|password)'''
+]
