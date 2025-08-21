@@ -2,9 +2,7 @@ version: '3.8'
 
 services:
   dashboard:
-    build:
-      context: .
-      dockerfile: Dockerfile.production
+    build: .
     ports:
       - "8050:8050"
     environment:

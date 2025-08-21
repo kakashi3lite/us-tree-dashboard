@@ -1,4 +1,5 @@
 version: '3'
+# Uses consolidated Dockerfile.jupyter for development notebooks
 services:
   jupyter:
     build:
