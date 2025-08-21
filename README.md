@@ -1,10 +1,11 @@
 # 🌿 PlantsWorld - Interactive Plant Biodiversity Dashboard
 
-A scalable, interactive dashboard for exploring plant biodiversity data with real-time visualizations, conservation insights, and API integration capabilities.
+A scalable, interactive dashboard for exploring plant biodiversity data with real-time visualizations, conservation insights, network analysis, and API integration capabilities.
 
 ## 🚀 Features
 
 ### 🌳 Tree Dashboard
+
 - **Interactive Tree Map**: Visualize tree distribution across different states and cities
 - **Summary Statistics**: Get quick insights with summary cards showing key metrics
 - **Data Filtering**: Filter data by state and city for focused analysis
@@ -12,6 +13,7 @@ A scalable, interactive dashboard for exploring plant biodiversity data with rea
 - **Real-time Updates**: Dynamic updates based on user selections
 
 ### 🌿 Global Biodiversity Dashboard
+
 - **Biodiversity Statistics**: Track total species, families, hotspots, and threatened species
 - **Interactive Controls**: Filter by plant family and conservation status
 - **Global Hotspots Map**: Explore biodiversity hotspots worldwide with interactive mapping
@@ -20,7 +22,17 @@ A scalable, interactive dashboard for exploring plant biodiversity data with rea
 - **Data Export**: Download biodiversity datasets in CSV format
 - **Enhanced Styling**: Beautiful cards with animations and responsive design
 
+### 🌐 Network Visualization [NEW]
+
+- **Interactive Network Maps**: Explore relationships between species, hotspots, and conservation statuses
+- **Multiple Visualization Types**: Choose between network, density, and cluster density visualizations
+- **Customizable Display**: Adjust node sizes, distances, and color schemes
+- **Pattern Discovery**: Identify important connections and clusters in biodiversity data
+- **VOSviewer Integration**: Powered by advanced network visualization technology
+- **See more details**: [VOSviewer Integration Documentation](README_VOSVIEWER.md)
+
 ### Core Dashboard Features
+
 - **Interactive Visualizations**: Dynamic charts and maps powered by Plotly
 - **Real-time Data Processing**: Efficient data handling and updates
 - **Modern UI/UX**: Clean, intuitive interface design
@@ -30,6 +42,7 @@ A scalable, interactive dashboard for exploring plant biodiversity data with rea
 - **Species Explorer**: Detailed plant family and species information
 
 ### Scalability & Integration
+
 - **Configurable Architecture**: Easy customization through `config.py`
 - **REST API**: Full API access for data integration
 - **Multiple Export Formats**: CSV, JSON, Excel export capabilities
@@ -37,6 +50,7 @@ A scalable, interactive dashboard for exploring plant biodiversity data with rea
 - **Modular Design**: Easy to extend and integrate into other projects
 
 ### Data Management
+
 - **Automated Data Updates**: Scheduled data fetching from multiple sources
 - **Data Validation**: Built-in data quality checks
 - **Multiple Data Sources**: GBIF, conservation databases, research datasets

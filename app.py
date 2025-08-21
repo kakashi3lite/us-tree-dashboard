@@ -21,6 +21,15 @@ except ImportError as e:
     logging.warning(f"Could not import charitable orgs: {e}")
     CHARITABLE_ORGS = []
 
+# Import VOSviewer integration components
+try:
+    from src.components import create_vosviewer_network, register_vosviewer_callbacks
+    from src.vosviewer_integration import integrate_vosviewer_into_dashboard, create_vosviewer_navbar_item
+    HAS_VOSVIEWER = True
+except ImportError as e:
+    logging.warning(f"Could not import VOSviewer components: {e}")
+    HAS_VOSVIEWER = False
+
 # Load environment variables
 load_dotenv()
 
@@ -59,6 +68,7 @@ navbar = dbc.Navbar(
                     dbc.NavItem(dbc.NavLink("Health", href="#health")),
                     dbc.NavItem(dbc.NavLink("Organizations", href="#organizations")),
                     dbc.NavItem(dbc.NavLink("Analysis", href="#analysis")),
+                    dbc.NavItem(dbc.NavLink("Networks", href="#networks")) if HAS_VOSVIEWER else None,
                 ], navbar=True)
             ])
         ])
@@ -335,6 +345,24 @@ class TreeDashboard:
                             )
                         ])
                     ], className="mb-4"),
+
+                    # Network visualization section (conditionally added)
+                    dbc.Card([
+                        dbc.CardHeader([
+                            html.H4(html.Span([
+                                html.I(className="fas fa-project-diagram me-2"), 
+                                "🔍 Network Visualization"
+                            ]), className="mb-0", id="networks")
+                        ]),
+                        dbc.CardBody([
+                            dcc.Loading(
+                                id="loading-network",
+                                type="default",
+                                color="#28a745",
+                                children=html.Div(id="network-container")
+                            )
+                        ])
+                    ], className="mb-4") if HAS_VOSVIEWER else None,
                 ], fluid=True),
 
                 # Enhanced Footer
@@ -806,6 +834,15 @@ dashboard = TreeDashboard()
 # Main app layout
 app.layout = dashboard.create_layout()
 
+# Register VOSviewer callbacks if available
+if HAS_VOSVIEWER:
+    try:
+        from src.components import register_vosviewer_callbacks
+        register_vosviewer_callbacks(app)
+        logger.info("✅ VOSviewer callbacks registered successfully")
+    except Exception as e:
+        logger.error(f"❌ Failed to register VOSviewer callbacks: {e}")
+
 # Callback to update summary cards
 @app.callback(
     Output("summary-cards", "children"),
@@ -895,6 +932,100 @@ def update_city_options(selected_state):
     except Exception as e:
         logger.error(f"Error updating city options: {e}")
         return []
+
+# Callback to populate VOSviewer network container
+@app.callback(
+    Output("network-container", "children"),
+    [Input("tabs", "active_tab")],
+    prevent_initial_call=False
+)
+def render_network_visualization(active_tab):
+    if not HAS_VOSVIEWER:
+        return html.Div("VOSviewer components not available", className="text-center p-5")
+    
+    if active_tab == "networks-tab":
+        try:
+            # Create the network visualization component
+            from src.components import create_vosviewer_network
+            return create_vosviewer_network()
+        except Exception as e:
+            logger.error(f"Error rendering VOSviewer: {e}")
+            return html.Div(f"Error loading network visualization: {str(e)}", className="text-danger p-5")
+    return html.Div()
+
+# ---------------------------------------------------------------------------
+# Observability & Health Endpoints (Prometheus metrics + basic health)
+# ---------------------------------------------------------------------------
+from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST  # type: ignore
+import time
+from opentelemetry import trace  # type: ignore
+from opentelemetry.sdk.resources import Resource  # type: ignore
+from opentelemetry.sdk.trace import TracerProvider  # type: ignore
+from opentelemetry.sdk.trace.export import BatchSpanProcessor  # type: ignore
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter  # type: ignore
+
+# Initialize OpenTelemetry (idempotent guard)
+if not isinstance(trace.get_tracer_provider(), TracerProvider):
+    try:
+        resource = Resource.create({"service.name": "conservation-dashboard", "service.version": "2.1.0"})
+        provider = TracerProvider(resource=resource)
+        processor = BatchSpanProcessor(OTLPSpanExporter(endpoint=os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318/v1/traces")))
+        provider.add_span_processor(processor)
+        trace.set_tracer_provider(provider)
+        logger.info("✅ OpenTelemetry tracing initialized")
+    except Exception as _otel_err:
+        logger.warning(f"OpenTelemetry initialization skipped: {_otel_err}")
+
+REQUEST_COUNTER = Counter('dashboard_requests_total', 'Total dashboard HTTP requests', ['endpoint', 'method'])
+REQUEST_LATENCY = Histogram('dashboard_request_latency_seconds', 'Latency for dashboard HTTP requests', ['endpoint'])
+ACTIVE_USERS_GAUGE = Gauge('dashboard_active_users', 'Active user sessions (approximate)')
+LAST_HEALTH_CHECK = Gauge('dashboard_last_health_check_timestamp', 'Last health check UNIX timestamp')
+
+@server.before_request
+def _before_request_metrics():  # pragma: no cover - simple instrumentation
+    from flask import request, g
+    g._start_time = time.time()
+
+@server.after_request
+def _after_request_metrics(response):  # pragma: no cover - simple instrumentation
+    from flask import request, g
+    try:
+        elapsed = time.time() - getattr(g, '_start_time', time.time())
+        REQUEST_COUNTER.labels(endpoint=request.path, method=request.method).inc()
+        REQUEST_LATENCY.labels(endpoint=request.path).observe(elapsed)
+    except Exception as metric_err:  # noqa: BLE001
+        logger.debug(f"Metric collection error: {metric_err}")
+    return response
+
+@server.route('/healthz')
+def health_root():  # pragma: no cover
+    """Lightweight container/platform liveness probe."""
+    LAST_HEALTH_CHECK.set_to_current_time()
+    return {"status": "ok", "version": "2.1.0"}, 200
+
+@server.route('/api/v1/health')
+def health_api():  # pragma: no cover
+    """Semantic API health endpoint used by orchestrators & monitors."""
+    LAST_HEALTH_CHECK.set_to_current_time()
+    issues: list[str] = []
+    try:
+        if dashboard.df_trees is None or dashboard.df_trees.empty:
+            issues.append("trees_dataset_empty")
+        if dashboard.df_canopy is None or dashboard.df_canopy.empty:
+            issues.append("canopy_dataset_empty")
+    except Exception as e:  # noqa: BLE001
+        issues.append(f"exception:{e.__class__.__name__}")
+    status = "healthy" if not issues else "degraded"
+    return {"status": status, "issues": issues, "records": {
+        "trees": 0 if dashboard.df_trees is None else len(dashboard.df_trees),
+        "canopy": 0 if dashboard.df_canopy is None else len(dashboard.df_canopy)
+    }}, 200 if status == "healthy" else 206
+
+@server.route('/metrics')
+def metrics():  # pragma: no cover
+    """Prometheus metrics scrape endpoint."""
+    from flask import Response
+    return Response(generate_latest(), mimetype=CONTENT_TYPE_LATEST)
 
 if __name__ == '__main__':
     try:
