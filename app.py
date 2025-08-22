@@ -3,16 +3,49 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
-import dash
+import dash  # Added after refactor ensuring availability before use
 import dash_bootstrap_components as dbc
 from dash import dcc, html
 from dash.dependencies import Input, Output, State
+
+
+import os
+import logging
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 import geopandas as gpd
 import plotly.express as px
 import plotly.graph_objects as go
 from dotenv import load_dotenv
+try:  # Optional dependency (may be absent in minimal test env)
+    from flask_caching import Cache  # type: ignore
+except ImportError:  # pragma: no cover - fallback only when package missing
+    class Cache:  # Minimal no-op cache shim
+        def __init__(self, app, config=None):
+            self.app = app
+            self.config = config or {}
+
+        def cached(self, *dargs, **dkwargs):
+            def decorator(func):
+                return func
+            return decorator
+
+        # Provide alias used in code (@cache.memoize)
+        memoize = cached
+
+        def clear(self):  # pragma: no cover - trivial
+            return None
+try:
+    import orjson  # type: ignore
+except ImportError:  # pragma: no cover - fallback if not installed
+    import json  # noqa: F401
+    class _OrjsonShim:  # simple shim with dumps returning bytes-like interface
+        @staticmethod
+        def dumps(data, option=None):
+            return json.dumps(data).encode()
+    orjson = _OrjsonShim()  # type: ignore
 
 # Import charitable organizations with error handling
 try:
@@ -40,6 +73,32 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Optional tracing (OpenTelemetry) loaded AFTER logger configured
+# ---------------------------------------------------------------------------
+try:  # Optional tracing dependencies
+    from opentelemetry import trace  # type: ignore
+    from opentelemetry.sdk.resources import Resource  # type: ignore
+    from opentelemetry.sdk.trace import TracerProvider  # type: ignore
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor  # type: ignore
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter  # type: ignore
+    _OTEL_AVAILABLE = True
+except Exception:  # pragma: no cover - dependency absent
+    _OTEL_AVAILABLE = False
+
+if _OTEL_AVAILABLE and os.getenv("ENABLE_TRACING", "0") == "1":  # pragma: no cover - optional path
+    try:
+        resource = Resource.create({"service.name": "us-tree-dashboard"})
+        provider = TracerProvider(resource=resource)
+        processor = BatchSpanProcessor(OTLPSpanExporter())
+        provider.add_span_processor(processor)
+        trace.set_tracer_provider(provider)
+        logger.info("✅ OpenTelemetry tracing initialized")
+    except Exception as _otel_err:
+        logger.warning(f"OpenTelemetry initialization skipped: {_otel_err}")
+elif not _OTEL_AVAILABLE:
+    logger.debug("OpenTelemetry packages not installed; tracing disabled")
+
 # Initialize the Dash app with Bootstrap theme
 app = dash.Dash(
     __name__,
@@ -49,6 +108,18 @@ app = dash.Dash(
 
 # For Gunicorn deployment
 server = app.server
+
+# ---------------------------------------------------------------------------
+# Performance: Caching layer (SimpleCache by default; configurable via env)
+# ---------------------------------------------------------------------------
+cache_config = {
+    "CACHE_TYPE": os.getenv("CACHE_TYPE", "SimpleCache"),
+    "CACHE_DEFAULT_TIMEOUT": int(os.getenv("CACHE_DEFAULT_TIMEOUT", "300")),
+}
+cache = Cache(server, config=cache_config)
+
+def _orjson_dumps(data):
+    return orjson.dumps(data, option=orjson.OPT_INDENT_2).decode()
 
 # Navigation bar with links
 navbar = dbc.Navbar(
@@ -183,6 +254,7 @@ class TreeDashboard:
         
         return pd.DataFrame(canopy_data)
 
+    @cache.cached(timeout=600)
     def create_sample_data(self):
         """Create sample data for development"""
         # Sample tree data
@@ -202,6 +274,7 @@ class TreeDashboard:
             'canopy_pct': np.random.uniform(10, 60, 60)
         })
 
+    @cache.cached(timeout=600)
     def prepare_dropdown_options(self):
         """Prepare options for dropdown menus"""
         self.state_options = [
@@ -297,8 +370,9 @@ class TreeDashboard:
                                             100: {'label': '100%', 'style': {'color': '#666'}}
                                         },
                                         tooltip={"placement": "bottom", "always_visible": True},
-                                        className="mb-3"
+                                        className="mb-1"
                                     ),
+                                    html.Div(id="canopy-range-label", className="text-muted small mb-3")
                                 ], md=12)
                             ])
                         ])
@@ -655,6 +729,7 @@ class TreeDashboard:
         )
         return dcc.Graph(figure=fig)
 
+    @cache.memoize(timeout=120)
     def create_map(
         self, selected_state: Optional[str], selected_city: Optional[str],
         canopy_range: List[float]
@@ -677,6 +752,7 @@ class TreeDashboard:
                     ]
                     
                     if not city_data.empty:
+                        render_mode = "webgl" if len(city_data) > 2000 else "auto"
                         fig = px.scatter_mapbox(
                             city_data,
                             lat='latitude',
@@ -690,7 +766,8 @@ class TreeDashboard:
                                 'Good': '#28a745',
                                 'Fair': '#ffc107',
                                 'Poor': '#dc3545'
-                            }
+                            },
+                            render_mode=render_mode
                         )
                         # Center the map on the data
                         fig.update_layout(
@@ -727,6 +804,7 @@ class TreeDashboard:
                         len(state_data)
                     )
                     
+                    render_mode = "webgl" if len(state_data) > 1000 else "auto"
                     fig = px.scatter_mapbox(
                         state_data,
                         lat=lats,
@@ -738,7 +816,8 @@ class TreeDashboard:
                         zoom=6,
                         height=600,
                         title=f'Canopy Coverage in {selected_state}',
-                        labels={'color': 'Canopy %'}
+                        labels={'color': 'Canopy %'},
+                        render_mode=render_mode
                     )
                     fig.update_layout(
                         mapbox_center_lat=state_coords['lat'],
@@ -843,7 +922,17 @@ if HAS_VOSVIEWER:
     except Exception as e:
         logger.error(f"❌ Failed to register VOSviewer callbacks: {e}")
 
-# Callback to update summary cards
+@cache.memoize(timeout=90)
+def _render_summary_cards(state, city):
+    cards = dashboard.create_summary_cards(state, city)
+    if cards:
+        return dbc.Row([dbc.Col(card, md=4) for card in cards[:3]])
+    return dbc.Alert(
+        "Select a state or city to view summary statistics.",
+        color="info",
+        className="text-center"
+    )
+
 @app.callback(
     Output("summary-cards", "children"),
     [Input("state-dropdown", "value"),
@@ -852,22 +941,17 @@ if HAS_VOSVIEWER:
 )
 def update_summary_cards(state, city):
     try:
-        cards = dashboard.create_summary_cards(state, city)
-        if cards:
-            return dbc.Row([dbc.Col(card, md=4) for card in cards[:3]])
-        else:
-            return dbc.Alert(
-                "Select a state or city to view summary statistics.",
-                color="info",
-                className="text-center"
-            )
+        return _render_summary_cards(state, city)
     except Exception as e:
         logger.error(f"Error updating summary cards: {e}")
-        return dbc.Alert(
-            "Error loading summary data. Please try again.",
-            color="danger",
-            className="text-center"
-        )
+        return dbc.Alert("Error loading summary data. Please try again.", color="danger", className="text-center")
+
+# Clientside callback for canopy range label (avoids server round-trip)
+app.clientside_callback(
+    "function(range){ if(!range){return ''}; return 'Range: '+ range[0] + '% - ' + range[1] + '%'; }",
+    Output("canopy-range-label", "children"),
+    Input("canopy-slider", "value")
+)
 
 # Callback to update charts
 @app.callback(
@@ -956,46 +1040,36 @@ def render_network_visualization(active_tab):
 # ---------------------------------------------------------------------------
 # Observability & Health Endpoints (Prometheus metrics + basic health)
 # ---------------------------------------------------------------------------
-from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST  # type: ignore
-import time
-from opentelemetry import trace  # type: ignore
-from opentelemetry.sdk.resources import Resource  # type: ignore
-from opentelemetry.sdk.trace import TracerProvider  # type: ignore
-from opentelemetry.sdk.trace.export import BatchSpanProcessor  # type: ignore
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter  # type: ignore
+try:  # Optional metrics dependencies
+    from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST  # type: ignore
+    import time
+    _METRICS_AVAILABLE = True
+except Exception:  # pragma: no cover
+    _METRICS_AVAILABLE = False
 
-# Initialize OpenTelemetry (idempotent guard)
-if not isinstance(trace.get_tracer_provider(), TracerProvider):
-    try:
-        resource = Resource.create({"service.name": "conservation-dashboard", "service.version": "2.1.0"})
-        provider = TracerProvider(resource=resource)
-        processor = BatchSpanProcessor(OTLPSpanExporter(endpoint=os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318/v1/traces")))
-        provider.add_span_processor(processor)
-        trace.set_tracer_provider(provider)
-        logger.info("✅ OpenTelemetry tracing initialized")
-    except Exception as _otel_err:
-        logger.warning(f"OpenTelemetry initialization skipped: {_otel_err}")
+if _METRICS_AVAILABLE:
+    REQUEST_COUNTER = Counter('dashboard_requests_total', 'Total dashboard HTTP requests', ['endpoint', 'method'])
+    REQUEST_LATENCY = Histogram('dashboard_request_latency_seconds', 'Latency for dashboard HTTP requests', ['endpoint'])
+    ACTIVE_USERS_GAUGE = Gauge('dashboard_active_users', 'Active user sessions (approximate)')
+    LAST_HEALTH_CHECK = Gauge('dashboard_last_health_check_timestamp', 'Last health check UNIX timestamp')
 
-REQUEST_COUNTER = Counter('dashboard_requests_total', 'Total dashboard HTTP requests', ['endpoint', 'method'])
-REQUEST_LATENCY = Histogram('dashboard_request_latency_seconds', 'Latency for dashboard HTTP requests', ['endpoint'])
-ACTIVE_USERS_GAUGE = Gauge('dashboard_active_users', 'Active user sessions (approximate)')
-LAST_HEALTH_CHECK = Gauge('dashboard_last_health_check_timestamp', 'Last health check UNIX timestamp')
+    @server.before_request
+    def _before_request_metrics():  # pragma: no cover
+        from flask import g  # type: ignore
+        g._start_time = time.time()
 
-@server.before_request
-def _before_request_metrics():  # pragma: no cover - simple instrumentation
-    from flask import request, g
-    g._start_time = time.time()
-
-@server.after_request
-def _after_request_metrics(response):  # pragma: no cover - simple instrumentation
-    from flask import request, g
-    try:
-        elapsed = time.time() - getattr(g, '_start_time', time.time())
-        REQUEST_COUNTER.labels(endpoint=request.path, method=request.method).inc()
-        REQUEST_LATENCY.labels(endpoint=request.path).observe(elapsed)
-    except Exception as metric_err:  # noqa: BLE001
-        logger.debug(f"Metric collection error: {metric_err}")
-    return response
+    @server.after_request
+    def _after_request_metrics(response):  # pragma: no cover
+        from flask import request, g  # type: ignore
+        try:
+            elapsed = time.time() - getattr(g, '_start_time', time.time())
+            REQUEST_COUNTER.labels(endpoint=request.path, method=request.method).inc()
+            REQUEST_LATENCY.labels(endpoint=request.path).observe(elapsed)
+        except Exception as metric_err:  # noqa: BLE001
+            logger.debug(f"Metric collection error: {metric_err}")
+        return response
+else:
+    logger.debug("Prometheus metrics not available; skipping instrumentation")
 
 @server.route('/healthz')
 def health_root():  # pragma: no cover

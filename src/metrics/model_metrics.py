@@ -12,9 +12,12 @@ from .base import BaseMetric, MetricSeries
 
 @dataclass
 class ModelMetric(BaseMetric):
-    """Metric specific to ML model performance."""
-    model_name: str
-    metric_type: str
+    """Metric specific to ML model performance.
+
+    Defaults provided to avoid ordering conflict with BaseMetric defaults.
+    """
+    model_name: str = ""
+    metric_type: str = ""
     confidence: Optional[float] = None
     prediction_id: Optional[str] = None
 
@@ -28,13 +31,19 @@ class ModelMetric(BaseMetric):
 
 @dataclass
 class ModelTrainingMetrics:
-    """Collection of metrics from a model training session."""
+    """Collection of metrics from a model training session.
+
+    Note: All required (non-default) fields must appear before any with defaults
+    to satisfy dataclass ordering constraints.
+    """
     model_name: str
     version: str
-    training_time: float
-    metrics: Dict[str, float]
-    feature_importance: Dict[str, float]
+    timestamp: str
+    metrics: Dict[str, Any]
     parameters: Dict[str, Any]
+    dataset_size: int
+    training_time: float
+    feature_importance: Dict[str, float] | None = None
     dataset_info: Dict[str, Any] = field(default_factory=dict)
     resource_usage: Dict[str, float] = field(default_factory=dict)
     training_start: datetime.datetime = field(default_factory=datetime.datetime.now)
@@ -70,15 +79,16 @@ class ModelTrainingMetrics:
             ))
 
         # Feature importance metrics
-        for feature, importance in self.feature_importance.items():
-            metrics.append(ModelMetric(
-                name=f"{self.model_name}_feature_importance_{feature}",
-                value=importance,
-                timestamp=timestamp,
-                tags=base_tags.copy(),
-                model_name=self.model_name,
-                metric_type='feature_importance'
-            ))
+        if self.feature_importance:
+            for feature, importance in self.feature_importance.items():
+                metrics.append(ModelMetric(
+                    name=f"{self.model_name}_feature_importance_{feature}",
+                    value=importance,
+                    timestamp=timestamp,
+                    tags=base_tags.copy(),
+                    model_name=self.model_name,
+                    metric_type='feature_importance'
+                ))
 
         # Resource usage metrics
         for resource, value in self.resource_usage.items():

@@ -22,17 +22,15 @@ from uuid import uuid4
 from openai import OpenAI
 
 # Import metrics components
+from .metrics_store import metrics_store, ModelMetrics
 from .metrics import (
-    metrics_store,
-    ModelMetrics,
-    BaseMetric,
-    ModelTrainingMetrics,
-    EnvironmentalImpactMetrics,
     calculate_confidence_intervals,
-    collect_latency_metrics,
-    MetricConfig,
-    MetricSeries
 )
+from .metrics.base import MetricConfig, Metric
+from .metrics.model_metrics import ModelTrainingMetrics, ModelMetric
+from .metrics.environmental_metrics import EnvironmentalImpactMetrics
+from .metrics.performance_metrics import collect_latency_metrics
+from .metrics.base import MetricSeries
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -70,107 +68,99 @@ class TreeAnalyzer:
             if growth_model_path.exists():
                 self.growth_model = joblib.load(growth_model_path)
 
-        def analyze_patterns_with_ai(self, data: pd.DataFrame, analysis_prompt: str, 
-                               client_factory: Optional[Callable[[], Any]] = None) -> str:
-        """
-        Analyze patterns in tree data using OpenAI's API.
-        
-        Args:
-            data: DataFrame containing tree data
-            analysis_prompt: Specific analysis request/question
-            client_factory: Optional factory function to create OpenAI client (for testing)
-            
-        Returns:
-            str: AI-generated analysis of the patterns
-            
-        Raises:
-            ValueError: If data is empty or required columns are missing
-            RuntimeError: If OpenAI API key is not configured
-        """
-        if data.empty:
-            raise ValueError("Input data is empty")
-            
-        # Initialize data summary
-        data_summary = {}
-        
-        # Validate required columns and data types
-        required_cols = {
-            'species': str,
-            'health': str,
-            'diameter': (int, float),
-            'lat': (int, float),
-            'lon': (int, float)
-        }
+# ----------------------------------------------------------------------
+# Top-level AI pattern analysis helper (used directly in tests)
+# ----------------------------------------------------------------------
+def analyze_patterns_with_ai(
+    data: pd.DataFrame,
+    analysis_prompt: str,
+    client_factory: Optional[Callable[[], Any]] = None,
+) -> str:
+    """Analyze patterns in tree data using an AI model (OpenAI by default).
 
-        for col, dtype in required_cols.items():
-            if col not in data.columns:
-                raise ValueError(f"Missing required column: {col}")
-            
-            # Check data types
-            if isinstance(dtype, tuple):
-                # For numeric columns
-                try:
-                    pd.to_numeric(data[col])
-                except (ValueError, TypeError):
-                    raise ValueError(f"Invalid data type in column {col}. Expected numeric.")
-            else:
-                # For string columns
-                if not all(isinstance(x, (str, np.str_)) for x in data[col]):
-                    raise ValueError(f"Invalid data type in column {col}. Expected string.")
-        
-        # Prepare data summary for the prompt
-        data_summary = {
-            'total_trees': len(data),
-            'species_count': data['species'].value_counts().to_dict(),
-            'health_distribution': data['health'].value_counts().to_dict(),
-            'avg_diameter': float(pd.to_numeric(data['diameter']).mean()),
-            'location_bounds': {
-                'lat': (float(data['lat'].min()), float(data['lat'].max())),
-                'lon': (float(data['lon'].min()), float(data['lon'].max()))
-            }
-        }
-        
-        # Create prompt
-        system_prompt = """You are an expert arborist and data scientist analyzing urban tree data.
-        Provide insights based on the data summary and specific analysis request.
-        Focus on practical implications for urban forestry management."""
-        
-        user_prompt = f"""
-        Data Summary:
-        {data_summary}
-        
-        Analysis Request:
-        {analysis_prompt}
-        
-        Please provide a detailed analysis with specific insights and recommendations.
-        """
-        
-        # Initialize OpenAI client
-        if client_factory is None:
-            api_key = os.getenv('OPENAI_API_KEY')
-            if not api_key:
-                raise RuntimeError("OpenAI API key not found in environment variables")
-            client = OpenAI()
+    Accepts both (lat, lon) or (latitude, longitude) column naming variants.
+    Performs strict validation prior to invoking the model.
+    A factory for the OpenAI client is used to enable test mocking.
+    """
+    if data.empty:
+        raise ValueError("Input data is empty")
+
+    # Column normalization (support different naming conventions)
+    rename_map = {}
+    if "latitude" in data.columns and "lat" not in data.columns:
+        rename_map["latitude"] = "lat"
+    if "longitude" in data.columns and "lon" not in data.columns:
+        rename_map["longitude"] = "lon"
+    if rename_map:
+        data = data.rename(columns=rename_map)
+
+    required_cols = {
+        "species": str,
+        "health": str,
+        "diameter": (int, float),
+        "lat": (int, float),
+        "lon": (int, float),
+    }
+    for col, dtype in required_cols.items():
+        if col not in data.columns:
+            raise ValueError(f"Missing required column: {col}")
+        if isinstance(dtype, tuple):
+            # Numeric validation
+            try:
+                pd.to_numeric(data[col])
+            except (ValueError, TypeError):
+                raise ValueError(f"Invalid data type in column {col}. Expected numeric.")
         else:
-            client = client_factory()
-        
-        try:
-            # Call OpenAI API
-            response = client.chat.completions.create(
-                model="gpt-4",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                temperature=0.7,
-                max_tokens=1000
-            )
-            
-            return response.choices[0].message.content
-            
-        except Exception as e:
-            logger.error(f"Error calling OpenAI API: {str(e)}")
-            raise RuntimeError(f"Failed to analyze patterns: {str(e)}")
+            if not all(isinstance(x, (str, np.str_)) for x in data[col]):
+                raise ValueError(f"Invalid data type in column {col}. Expected string.")
+
+    # Summarize data for prompt
+    data_summary = {
+        "total_trees": int(len(data)),
+        "species_count": data["species"].value_counts().to_dict(),
+        "health_distribution": data["health"].value_counts().to_dict(),
+        "avg_diameter": float(pd.to_numeric(data["diameter"]).mean()),
+        "location_bounds": {
+            "lat": (float(data["lat"].min()), float(data["lat"].max())),
+            "lon": (float(data["lon"].min()), float(data["lon"].max())),
+        },
+    }
+
+    system_prompt = (
+        "You are an expert arborist and data scientist analyzing urban tree data. "
+        "Provide insights based on the data summary and specific analysis request. "
+        "Focus on practical implications for urban forestry management."
+    )
+
+    user_prompt = (
+        f"Data Summary:\n{data_summary}\n\n"
+        f"Analysis Request:\n{analysis_prompt}\n\n"
+        "Provide a detailed analysis with specific, actionable recommendations."
+    )
+
+    # Build / obtain client
+    if client_factory is None:
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise RuntimeError("OpenAI API key not found in environment variables")
+        client = OpenAI()
+    else:
+        client = client_factory()
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.7,
+            max_tokens=800,
+        )
+        return response.choices[0].message.content
+    except Exception as e:  # pragma: no cover - network errors in real env
+        logger.error("Error calling OpenAI API: %s", e)
+        raise RuntimeError(f"Failed to analyze patterns: {e}")
 
 class TreeHealthPredictor:
     """Predicts tree health based on various environmental and physical features."""
@@ -275,7 +265,7 @@ class TreeHealthPredictor:
         
         # Store training metrics
         training_time = time.time() - train_start_time
-        model_metrics = ModelTrainingMetrics(
+        model_metrics = ModelMetrics(
             model_name='TreeHealthPredictor',
             version=self.model_version,
             timestamp=datetime.now().isoformat(),
@@ -410,7 +400,7 @@ class TreeGrowthForecaster:
         
         # Store training metrics
         training_time = time.time() - train_start_time
-        model_metrics = ModelTrainingMetrics(
+        model_metrics = ModelMetrics(
             model_name='TreeGrowthForecaster',
             version=self.model_version,
             timestamp=datetime.now().isoformat(),
@@ -644,7 +634,7 @@ class TreeValueEstimator:
         
         # Store training metrics
         training_time = time.time() - train_start_time
-        model_metrics = ModelTrainingMetrics(
+        model_metrics = ModelMetrics(
             model_name='TreeValueEstimator',
             version=self.model_version,
             timestamp=datetime.now().isoformat(),

@@ -1,1 +1,95 @@
-"""\nPreference tracking for EnhanceX.\n\nProvides functionality to track and manage user preferences,\nincluding UI settings, filter selections, and visualization preferences.\n"""\n\nfrom typing import Dict, List, Any, Optional, Union\nfrom dataclasses import dataclass, field\nimport time\nimport json\nfrom pathlib import Path\nimport logging\n\nfrom .memory_store import MemoryStore, MemoryType\n\nlogger = logging.getLogger(__name__)\n\n@dataclass\nclass PreferenceCategory:\n    """Category of user preferences."""\n    name: str\n    description: str\n    preferences: Dict[str, Any] = field(default_factory=dict)\n    metadata: Dict[str, Any] = field(default_factory=dict)\n    last_updated: float = field(default_factory=time.time)\n    \n    def to_dict(self) -> Dict[str, Any]:\n        """Convert to dictionary for serialization."""\n        return {\n            "name": self.name,\n            "description": self.description,\n            "preferences": self.preferences,\n            "metadata": self.metadata,\n            "last_updated": self.last_updated\n        }\n    \n    @classmethod\n    def from_dict(cls, data: Dict[str, Any]) -> 'PreferenceCategory':\n        """Create preference category from dictionary."""\n        return cls(\n            name=data["name"],\n            description=data["description"],\n            preferences=data["preferences"],\n            metadata=data["metadata"],\n            last_updated=data["last_updated"]\n        )\n\nclass PreferenceTracker:\n    """Tracks and manages user preferences."""\n    \n    def __init__(self, memory_store: MemoryStore):\n        """Initialize preference tracker with memory store."""\n        self.memory_store = memory_store\n        self.categories: Dict[str, PreferenceCategory] = {}\n        \n        # Default categories\n        self._initialize_default_categories()\n        \n        # Load saved preferences\n        self._load_preferences()\n    \n    def _initialize_default_categories(self):\n        """Initialize default preference categories."""\n        default_categories = [\n            PreferenceCategory(\n                name="ui",\n                description="User interface preferences",\n                preferences={\n                    "theme": "light",\n                    "layout": "default",\n                    "font_size": "medium",\n                    "show_tooltips": True\n                }\n            ),\n            PreferenceCategory(\n                name="filters",\n                description="Data filtering preferences",\n                preferences={\n                    "default_state": None,\n                    "default_city": None,\n                    "canopy_range": [0, 100],\n                    "remember_last": True\n                }\n            ),\n            PreferenceCategory(\n                name="visualizations",\n                description="Data visualization preferences",\n                preferences={\n                    "chart_type": "bar",\n                    "color_scheme": "green",\n                    "map_view": "choropleth",\n                    "show_legends": True\n                }\n            ),\n            PreferenceCategory(\n                name="notifications",\n                description="Notification preferences",\n                preferences={\n                    "show_alerts": True,\n                    "data_update_notifications": True,\n                    "performance_warnings": True\n                }\n            )\n        ]\n        \n        for category in default_categories:\n            self.categories[category.name] = category\n    \n    def _load_preferences(self):\n        """Load saved preferences from memory store."""\n        for category_name in self.categories.keys():\n            saved_category = self.memory_store.retrieve(\n                key=f"preference_category_{category_name}",\n                memory_type=MemoryType.PREFERENCE\n            )\n            \n            if saved_category:\n                self.categories[category_name] = PreferenceCategory.from_dict(saved_category)\n    \n    def _save_category(self, category_name: str):\n        """Save a preference category to memory store."""\n        if category_name in self.categories:\n            category = self.categories[category_name]\n            category.last_updated = time.time()\n            \n            self.memory_store.store(\n                key=f"preference_category_{category_name}",\n                value=category.to_dict(),\n                memory_type=MemoryType.PREFERENCE\n            )\n    \n    def get_preference(self, category: str, key: str) -> Optional[Any]:\n        """Get a specific preference value."""\n        if category not in self.categories or key not in self.categories[category].preferences:\n            return None\n        \n        return self.categories[category].preferences[key]\n    \n    def set_preference(self, category: str, key: str, value: Any) -> bool:\n        """Set a specific preference value."""\n        if category not in self.categories:\n            logger.warning(f"Preference category '{category}' does not exist")\n            return False\n        \n        self.categories[category].preferences[key] = value\n        self._save_category(category)\n        \n        return True\n    \n    def get_category(self, category: str) -> Optional[Dict[str, Any]]:\n        """Get all preferences in a category."""\n        if category not in self.categories:\n            return None\n        \n        return self.categories[category].preferences.copy()\n    \n    def update_category(self, category: str, preferences: Dict[str, Any]) -> bool:\n        """Update multiple preferences in a category."""\n        if category not in self.categories:\n            logger.warning(f"Preference category '{category}' does not exist")\n            return False\n        \n        # Update preferences\n        self.categories[category].preferences.update(preferences)\n        self._save_category(category)\n        \n        return True\n    \n    def create_category(self, name: str, description: str, \n                       initial_preferences: Optional[Dict[str, Any]] = None) -> bool:\n        """Create a new preference category."""\n        if name in self.categories:\n            logger.warning(f"Preference category '{name}' already exists")\n            return False\n        \n        self.categories[name] = PreferenceCategory(\n            name=name,\n            description=description,\n            preferences=initial_preferences or {}\n        )\n        \n        self._save_category(name)\n        return True\n    \n    def delete_category(self, name: str) -> bool:\n        """Delete a preference category."""\n        if name not in self.categories:\n            return False\n        \n        del self.categories[name]\n        self.memory_store.delete(f"preference_category_{name}", MemoryType.PREFERENCE)\n        \n        return True\n    \n    def reset_to_defaults(self, category: Optional[str] = None) -> bool:\n        """Reset preferences to defaults."""\n        # Store current categories\n        current_categories = self.categories.copy()\n        \n        # Reinitialize defaults\n        self.categories = {}\n        self._initialize_default_categories()\n        \n        if category:\n            # Reset only specified category\n            if category not in self.categories:\n                logger.warning(f"Preference category '{category}' does not exist")\n                self.categories = current_categories  # Restore original state\n                return False\n            \n            # Restore other categories\n            for cat_name, cat_value in current_categories.items():\n                if cat_name != category:\n                    self.categories[cat_name] = cat_value\n            \n            self._save_category(category)\n        else:\n            # Reset all categories\n            for category_name in self.categories:\n                self._save_category(category_name)\n        \n        return True\n    \n    def get_all_preferences(self) -> Dict[str, Dict[str, Any]]:\n        """Get all preferences organized by category."""\n        return {\n            category_name: category.preferences.copy()\n            for category_name, category in self.categories.items()\n        }\n    \n    def apply_preferences_to_context(self, context_key: str, preferences: Dict[str, Any]) -> None:\n        """Apply a set of preferences to the current context."""\n        # This method would interact with the ContextManager in a real implementation\n        # For now, we'll just log the action\n        logger.info(f"Applied preferences to context '{context_key}': {preferences}")\n
+"""Preference tracking for EnhanceX.
+
+Simplified clean version without escaped newlines.
+"""
+
+from typing import Dict, Any, Optional
+from dataclasses import dataclass, field
+import time
+import logging
+
+from .memory_store import MemoryStore, MemoryType
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class PreferenceCategory:
+	name: str
+	description: str
+	preferences: Dict[str, Any] = field(default_factory=dict)
+	metadata: Dict[str, Any] = field(default_factory=dict)
+	last_updated: float = field(default_factory=time.time)
+
+	def to_dict(self) -> Dict[str, Any]:
+		return {
+			"name": self.name,
+			"description": self.description,
+			"preferences": self.preferences,
+			"metadata": self.metadata,
+			"last_updated": self.last_updated,
+		}
+
+	@classmethod
+	def from_dict(cls, data: Dict[str, Any]) -> "PreferenceCategory":
+		return cls(
+			name=data["name"],
+			description=data["description"],
+			preferences=data.get("preferences", {}),
+			metadata=data.get("metadata", {}),
+			last_updated=data.get("last_updated", time.time()),
+		)
+
+
+class PreferenceTracker:
+	def __init__(self, memory_store: MemoryStore):
+		self.memory_store = memory_store
+		self.categories: Dict[str, PreferenceCategory] = {}
+		self._initialize_default_categories()
+		self._load_preferences()
+
+	def _initialize_default_categories(self):
+		defaults = [
+			PreferenceCategory("ui", "User interface", {"theme": "light", "layout": "default"}),
+			PreferenceCategory("filters", "Filtering", {"canopy_range": [0, 100]}),
+			PreferenceCategory("visualization", "Visualization settings", {"color_palette": "viridis"}),
+		]
+		for cat in defaults:
+			self.categories[cat.name] = cat
+
+	def _load_preferences(self):
+		for name in list(self.categories.keys()):
+			saved = self.memory_store.retrieve(f"preference_category_{name}", MemoryType.PREFERENCE)
+			if saved:
+				self.categories[name] = PreferenceCategory.from_dict(saved)
+
+	def _save_category(self, name: str):
+		if name in self.categories:
+			cat = self.categories[name]
+			cat.last_updated = time.time()
+			self.memory_store.store(
+				f"preference_category_{name}", cat.to_dict(), MemoryType.PREFERENCE
+			)
+
+	def get_preference(self, category: str, key: str):
+		cat = self.categories.get(category)
+		return None if not cat else cat.preferences.get(key)
+
+	def set_preference(self, category: str, key: str, value):
+		cat = self.categories.get(category)
+		if not cat:
+			logger.warning("Preference category '%s' does not exist", category)
+			return False
+		cat.preferences[key] = value
+		self._save_category(category)
+		return True
+
+	def get_all_preferences(self) -> Dict[str, Dict[str, Any]]:
+		return {k: v.preferences.copy() for k, v in self.categories.items()}
+
+	def has_preferences(self) -> bool:
+		"""Return True if any category has at least one stored preference."""
+		return any(bool(cat.preferences) for cat in self.categories.values())
+
+	def apply_preferences_to_context(self, context_key: str, preferences: Dict[str, Any]) -> None:
+		logger.info("Applied preferences to context '%s': %s", context_key, preferences)

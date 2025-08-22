@@ -11,8 +11,11 @@ from .base import BaseMetric, MetricSeries
 
 @dataclass
 class EnvironmentalMetric(BaseMetric):
-    """Environmental impact metric."""
-    impact_type: str
+    """Environmental impact metric.
+
+    Defaults provided to maintain correct ordering with BaseMetric optional fields.
+    """
+    impact_type: str = ""
     location: Optional[Dict[str, float]] = None
     confidence: Optional[float] = None
 
