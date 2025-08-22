@@ -1,1 +1,73 @@
-"""\nTests for the EnhanceX memory management system.\n"""\n\nimport os\nimport sys\nimport unittest\nimport tempfile\nimport shutil\nimport time\nimport json\nfrom pathlib import Path\n\n# Add the src directory to the path so we can import the modules\nsys.path.insert(0, str(Path(__file__).parent.parent))\n\nfrom src.memory import EnhanceX, MemoryStore, MemoryType\n\nclass TestEnhanceX(unittest.TestCase):\n    """Test cases for the EnhanceX memory management system."""\n    \n    def setUp(self):\n        """Set up test environment."""\n        # Create a temporary directory for test data\n        self.test_dir = tempfile.mkdtemp()\n        self.enhancex = EnhanceX(data_dir=self.test_dir)\n    \n    def tearDown(self):\n        """Clean up test environment."""\n        # Remove the temporary directory\n        shutil.rmtree(self.test_dir)\n    \n    def test_session_management(self):\n        """Test session management functionality."""\n        # Start a session\n        session_id = self.enhancex.start_session({\n            "test": True\n        })\n        \n        # Verify session is active\n        self.assertTrue(self.enhancex.is_session_active())\n        \n        # End session\n        self.assertTrue(self.enhancex.end_session())\n        \n        # Verify session is no longer active\n        self.assertFalse(self.enhancex.is_session_active())\n    \n    def test_user_preferences(self):\n        """Test user preference management."""\n        # Set preferences\n        self.enhancex.set_user_preference("ui", "theme", "dark")\n        self.enhancex.set_user_preference("visualization", "color_palette", "viridis")\n        \n        # Get preferences\n        theme = self.enhancex.get_user_preference("ui", "theme")\n        color_palette = self.enhancex.get_user_preference("visualization", "color_palette")\n        \n        # Verify preferences\n        self.assertEqual(theme, "dark")\n        self.assertEqual(color_palette, "viridis")\n        \n        # Get all preferences\n        all_prefs = self.enhancex.get_all_preferences()\n        self.assertIn("ui", all_prefs)\n        self.assertIn("visualization", all_prefs)\n        self.assertEqual(all_prefs["ui"]["theme"], "dark")\n    \n    def test_interaction_tracking(self):\n        """Test interaction tracking."""\n        # Start a session\n        self.enhancex.start_session()\n        \n        # Record interactions\n        interaction1 = self.enhancex.record_interaction(\n            "filter_change", \n            {"filter": "city", "value": "New York"}\n        )\n        \n        interaction2 = self.enhancex.record_interaction(\n            "chart_click", \n            {"chart": "species_distribution", "value": "Oak"}\n        )\n        \n        # Get recent interactions\n        recent = self.enhancex.get_recent_interactions()\n        \n        # Verify interactions\n        self.assertEqual(len(recent), 2)\n        self.assertEqual(recent[0]["interaction_type"], "chart_click")\n        self.assertEqual(recent[1]["interaction_type"], "filter_change")\n        \n        # Filter by interaction type\n        filter_interactions = self.enhancex.get_recent_interactions("filter_change")\n        self.assertEqual(len(filter_interactions), 1)\n        self.assertEqual(filter_interactions[0]["interaction_type"], "filter_change")\n        \n        # End session\n        self.enhancex.end_session()\n    \n    def test_session_state(self):\n        """Test session state management."""\n        # Start a session\n        self.enhancex.start_session()\n        \n        # Update state\n        self.enhancex.update_session_state({\n            "current_view": "map",\n            "filters": {\n                "city": "New York",\n                "species": "Oak"\n            }\n        })\n        \n        # Get state\n        state = self.enhancex.get_session_state()\n        \n        # Verify state\n        self.assertEqual(state["current_view"], "map")\n        self.assertEqual(state["filters"]["city"], "New York")\n        \n        # Get specific state key\n        current_view = self.enhancex.get_session_state("current_view")\n        self.assertEqual(current_view, "map")\n        \n        # End session\n        self.enhancex.end_session()\n    \n    def test_project_context(self):\n        """Test project context management."""\n        # Create context\n        context_id = self.enhancex.create_project_context(\n            "Tree Analysis",\n            "Analysis of tree health in urban areas",\n            {\n                "dataset": "urban_trees_2023",\n                "analysis_parameters": {\n                    "health_threshold": 0.7\n                }\n            }\n        )\n        \n        # Get context\n        context = self.enhancex.get_project_context(context_id)\n        \n        # Verify context\n        self.assertEqual(context["dataset"], "urban_trees_2023")\n        self.assertEqual(context["analysis_parameters"]["health_threshold"], 0.7)\n        \n        # Update context\n        self.enhancex.update_project_context(\n            context_id,\n            {\n                "analysis_parameters": {\n                    "health_threshold": 0.8,\n                    "risk_factors": ["pollution"]\n                }\n            }\n        )\n        \n        # Get updated context\n        updated_context = self.enhancex.get_project_context(context_id)\n        \n        # Verify updated context\n        self.assertEqual(updated_context["analysis_parameters"]["health_threshold"], 0.8)\n        self.assertIn("pollution", updated_context["analysis_parameters"]["risk_factors"])\n    \n    def test_long_term_memory(self):\n        """Test long-term memory storage."""\n        # Store data\n        self.enhancex.store_long_term_memory(\n            "test_data",\n            {\n                "timestamp": time.time(),\n                "value": "test value"\n            }\n        )\n        \n        # Retrieve data\n        data = self.enhancex.retrieve_long_term_memory("test_data")\n        \n        # Verify data\n        self.assertEqual(data["value"], "test value")\n        \n        # Store with expiry\n        self.enhancex.store_long_term_memory(\n            "expiring_data",\n            {\n                "value": "expiring value"\n            },\n            expiry=time.time() - 1  # Already expired\n        )\n        \n        # Clean up expired entries\n        cleaned = self.enhancex.cleanup_expired_memory()\n        self.assertGreaterEqual(cleaned, 1)\n        \n        # Verify expired data is gone\n        expired_data = self.enhancex.retrieve_long_term_memory("expiring_data")\n        self.assertIsNone(expired_data)\n    \n    def test_interaction_handlers(self):\n        """Test interaction handlers."""\n        # Start a session\n        self.enhancex.start_session()\n        \n        # Create a test handler\n        self.handler_called = False\n        self.handler_data = None\n        \n        def test_handler(interaction):\n            self.handler_called = True\n            self.handler_data = interaction.data\n        \n        # Register handler\n        self.enhancex.register_interaction_handler("test_event", test_handler)\n        \n        # Record interaction that should trigger handler\n        test_data = {"test": "data"}\n        self.enhancex.record_interaction("test_event", test_data)\n        \n        # Verify handler was called\n        self.assertTrue(self.handler_called)\n        self.assertEqual(self.handler_data, test_data)\n        \n        # End session\n        self.enhancex.end_session()\n\nif __name__ == "__main__":\n    unittest.main()
+"""Tests for the EnhanceX memory management system."""
+
+import os
+import sys
+import unittest
+import tempfile
+import shutil
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from src.memory import EnhanceX, MemoryStore, MemoryType
+
+
+class TestEnhanceX(unittest.TestCase):
+	def setUp(self):
+		self.test_dir = tempfile.mkdtemp()
+		self.enhancex = EnhanceX(data_dir=self.test_dir)
+
+	def tearDown(self):
+		shutil.rmtree(self.test_dir)
+
+	def test_session_management(self):
+		session_id = self.enhancex.start_session({"test": True})
+		self.assertTrue(session_id)
+		self.assertTrue(self.enhancex.is_session_active())
+		self.assertTrue(self.enhancex.end_session())
+		self.assertFalse(self.enhancex.is_session_active())
+
+	def test_user_preferences(self):
+		self.enhancex.set_user_preference("ui", "theme", "dark")
+		self.enhancex.set_user_preference("visualization", "color_palette", "viridis")
+		theme = self.enhancex.get_user_preference("ui", "theme")
+		palette = self.enhancex.get_user_preference("visualization", "color_palette")
+		self.assertEqual(theme, "dark")
+		self.assertEqual(palette, "viridis")
+
+	def test_interaction_tracking(self):
+		self.enhancex.start_session()
+		self.enhancex.record_interaction("filter_change", {"filter": "city", "value": "New York"})
+		self.enhancex.record_interaction("chart_click", {"chart": "species_distribution", "value": "Oak"})
+		recent = self.enhancex.get_recent_interactions()
+		self.assertEqual(len(recent), 2)
+		self.enhancex.end_session()
+
+	def test_session_state(self):
+		self.enhancex.start_session()
+		self.enhancex.update_session_state({"current_view": "map", "filters": {"city": "New York"}})
+		state = self.enhancex.get_session_state()
+		self.assertEqual(state["current_view"], "map")
+		self.enhancex.end_session()
+
+	def test_long_term_memory(self):
+		self.enhancex.store_long_term_memory("test_data", {"value": "x", "timestamp": time.time()})
+		data = self.enhancex.retrieve_long_term_memory("test_data")
+		self.assertEqual(data["value"], "x")
+
+	def test_interaction_handlers(self):
+		self.enhancex.start_session()
+		called = {"flag": False}
+
+		def h(interaction):
+			called["flag"] = True
+
+		self.enhancex.register_interaction_handler("evt", h)
+		self.enhancex.record_interaction("evt", {})
+		self.assertTrue(called["flag"])
+		self.enhancex.end_session()
+
+
+if __name__ == "__main__":  # pragma: no cover
+	unittest.main()

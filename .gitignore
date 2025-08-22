@@ -18,6 +18,9 @@ sdist/
 var/
 wheels/
 *.egg-info/
+
+# Backup files from corruption fixes
+*_orig.py
 .installed.cfg
 *.egg
 

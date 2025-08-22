@@ -1,1 +1,205 @@
-"""\nSession memory management for EnhanceX.\n\nProvides short-term memory capabilities for tracking user interactions\nand maintaining state during a dashboard session.\n"""\n\nfrom typing import Dict, List, Any, Optional, Union, Callable\nfrom dataclasses import dataclass, field\nimport time\nimport json\nfrom datetime import datetime, timedelta\nimport logging\nimport uuid\n\nfrom .memory_store import MemoryStore, MemoryType\n\nlogger = logging.getLogger(__name__)\n\n@dataclass\nclass Interaction:\n    """Record of a user interaction."""\n    interaction_id: str\n    interaction_type: str  # e.g., 'filter_change', 'chart_click', 'page_view'\n    timestamp: float\n    data: Dict[str, Any]\n    metadata: Dict[str, Any] = field(default_factory=dict)\n\n@dataclass\nclass SessionState:\n    """Current state of the user session."""\n    session_id: str\n    start_time: float\n    last_activity: float\n    state: Dict[str, Any] = field(default_factory=dict)\n    metadata: Dict[str, Any] = field(default_factory=dict)\n\nclass SessionMemory:\n    """Manages short-term memory for user sessions."""\n    \n    def __init__(self, memory_store: MemoryStore, session_timeout: int = 30):\n        """\n        Initialize session memory.\n        \n        Args:\n            memory_store: Memory storage system\n            session_timeout: Session timeout in minutes\n        """\n        self.memory_store = memory_store\n        self.session_timeout = session_timeout\n        self.current_session: Optional[SessionState] = None\n        self.interactions: List[Interaction] = []\n        self.interaction_handlers: Dict[str, List[Callable]] = {}\n        \n        # Try to restore session if exists\n        self._restore_session()\n    \n    def _restore_session(self) -> bool:\n        """Attempt to restore an existing session."""\n        session_data = self.memory_store.retrieve("current_session", MemoryType.SHORT_TERM)\n        \n        if not session_data:\n            return False\n        \n        # Check if session has expired\n        last_activity = session_data.get("last_activity", 0)\n        if time.time() - last_activity > (self.session_timeout * 60):\n            # Session expired, don't restore\n            return False\n        \n        # Restore session\n        self.current_session = SessionState(\n            session_id=session_data["session_id"],\n            start_time=session_data["start_time"],\n            last_activity=session_data["last_activity"],\n            state=session_data["state"],\n            metadata=session_data["metadata"]\n        )\n        \n        # Restore interactions\n        interactions_data = self.memory_store.retrieve(\n            f"interactions_{self.current_session.session_id}", \n            MemoryType.SHORT_TERM\n        )\n        \n        if interactions_data:\n            self.interactions = [\n                Interaction(\n                    interaction_id=item["interaction_id"],\n                    interaction_type=item["interaction_type"],\n                    timestamp=item["timestamp"],\n                    data=item["data"],\n                    metadata=item["metadata"]\n                )\n                for item in interactions_data\n            ]\n        \n        return True\n    \n    def _save_session(self):\n        """Save current session to memory store."""\n        if not self.current_session:\n            return\n        \n        # Update last activity time\n        self.current_session.last_activity = time.time()\n        \n        # Save session state\n        session_data = {\n            "session_id": self.current_session.session_id,\n            "start_time": self.current_session.start_time,\n            "last_activity": self.current_session.last_activity,\n            "state": self.current_session.state,\n            "metadata": self.current_session.metadata\n        }\n        \n        self.memory_store.store(\n            key="current_session",\n            value=session_data,\n            memory_type=MemoryType.SHORT_TERM,\n            # Set expiry to session timeout + buffer\n            expiry=time.time() + ((self.session_timeout + 5) * 60)\n        )\n        \n        # Save interactions\n        if self.interactions:\n            interactions_data = [\n                {\n                    "interaction_id": item.interaction_id,\n                    "interaction_type": item.interaction_type,\n                    "timestamp": item.timestamp,\n                    "data": item.data,\n                    "metadata": item.metadata\n                }\n                for item in self.interactions\n            ]\n            \n            self.memory_store.store(\n                key=f"interactions_{self.current_session.session_id}",\n                value=interactions_data,\n                memory_type=MemoryType.SHORT_TERM,\n                expiry=time.time() + ((self.session_timeout + 5) * 60)\n            )\n    \n    def start_session(self, metadata: Optional[Dict[str, Any]] = None) -> str:\n        """Start a new user session."""\n        session_id = str(uuid.uuid4())\n        current_time = time.time()\n        \n        self.current_session = SessionState(\n            session_id=session_id,\n            start_time=current_time,\n            last_activity=current_time,\n            metadata=metadata or {}\n        )\n        \n        self.interactions = []\n        self._save_session()\n        \n        return session_id\n    \n    def end_session(self) -> bool:\n        """End the current session."""\n        if not self.current_session:\n            return False\n        \n        # Archive session data if needed\n        # For now, just clear from short-term memory\n        self.memory_store.delete("current_session", MemoryType.SHORT_TERM)\n        self.memory_store.delete(\n            f"interactions_{self.current_session.session_id}", \n            MemoryType.SHORT_TERM\n        )\n        \n        self.current_session = None\n        self.interactions = []\n        \n        return True\n    \n    def record_interaction(self, interaction_type: str, data: Dict[str, Any], \n                         metadata: Optional[Dict[str, Any]] = None) -> Optional[str]:\n        """Record a user interaction."""\n        if not self.current_session:\n            logger.warning("Cannot record interaction: No active session")\n            return None\n        \n        interaction_id = str(uuid.uuid4())\n        interaction = Interaction(\n            interaction_id=interaction_id,\n            interaction_type=interaction_type,\n            timestamp=time.time(),\n            data=data,\n            metadata=metadata or {}\n        )\n        \n        self.interactions.append(interaction)\n        \n        # Limit interactions list size\n        if len(self.interactions) > 1000:\n            self.interactions = self.interactions[-1000:]\n        \n        # Save session with updated interactions\n        self._save_session()\n        \n        # Trigger any registered handlers for this interaction type\n        self._trigger_handlers(interaction)\n        \n        return interaction_id\n    \n    def get_state(self, key: Optional[str] = None) -> Any:\n        """Get current session state."""\n        if not self.current_session:\n            return None\n        \n        if key is not None:\n            return self.current_session.state.get(key)\n        \n        return self.current_session.state.copy()\n    \n    def update_state(self, updates: Dict[str, Any]) -> bool:\n        """Update session state."""\n        if not self.current_session:\n            logger.warning("Cannot update state: No active session")\n            return False\n        \n        self.current_session.state.update(updates)\n        self._save_session()\n        \n        return True\n    \n    def get_recent_interactions(self, interaction_type: Optional[str] = None, \n                              limit: int = 10) -> List[Dict[str, Any]]:\n        """Get recent user interactions."""\n        if not self.interactions:\n            return []\n        \n        filtered = self.interactions\n        if interaction_type:\n            filtered = [i for i in filtered if i.interaction_type == interaction_type]\n        \n        # Sort by timestamp (newest first) and limit\n        sorted_interactions = sorted(filtered, key=lambda x: x.timestamp, reverse=True)[:limit]\n        \n        return [\n            {\n                "interaction_id": item.interaction_id,\n                "interaction_type": item.interaction_type,\n                "timestamp": item.timestamp,\n                "data": item.data,\n                "metadata": item.metadata\n            }\n            for item in sorted_interactions\n        ]\n    \n    def register_interaction_handler(self, interaction_type: str, handler: Callable) -> None:\n        """Register a handler for a specific interaction type."""\n        if interaction_type not in self.interaction_handlers:\n            self.interaction_handlers[interaction_type] = []\n        \n        self.interaction_handlers[interaction_type].append(handler)\n    \n    def _trigger_handlers(self, interaction: Interaction) -> None:\n        """Trigger registered handlers for an interaction."""\n        handlers = self.interaction_handlers.get(interaction.interaction_type, [])\n        \n        for handler in handlers:\n            try:\n                handler(interaction)\n            except Exception as e:\n                logger.error(f"Error in interaction handler: {e}")\n    \n    def get_session_duration(self) -> Optional[float]:\n        """Get current session duration in seconds."""\n        if not self.current_session:\n            return None\n        \n        return time.time() - self.current_session.start_time\n    \n    def is_session_active(self) -> bool:\n        """Check if there is an active session."""\n        if not self.current_session:\n            return False\n        \n        # Check if session has expired\n        if time.time() - self.current_session.last_activity > (self.session_timeout * 60):\n            # Session expired, end it\n            self.end_session()\n            return False\n        \n        return True\n    \n    def keep_alive(self) -> bool:\n        """Update last activity time to keep session alive."""\n        if not self.current_session:\n            return False\n        \n        self.current_session.last_activity = time.time()\n        self._save_session()\n        \n        return True\n
+"""Session memory management for EnhanceX (clean version)."""
+
+from typing import Dict, List, Any, Optional, Callable
+from dataclasses import dataclass, field
+import time
+import logging
+import uuid
+
+from .memory_store import MemoryStore, MemoryType
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class Interaction:
+	interaction_id: str
+	interaction_type: str
+	timestamp: float
+	data: Dict[str, Any]
+	metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class SessionState:
+	session_id: str
+	start_time: float
+	last_activity: float
+	state: Dict[str, Any] = field(default_factory=dict)
+	metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+class SessionMemory:
+	def __init__(self, memory_store: MemoryStore, session_timeout: int = 30):
+		self.memory_store = memory_store
+		self.session_timeout = session_timeout
+		self.current_session: Optional[SessionState] = None
+		self.interactions: List[Interaction] = []
+		self.interaction_handlers: Dict[str, List[Callable]] = {}
+		self._restore_session()
+
+	def _restore_session(self) -> bool:
+		data = self.memory_store.retrieve("current_session", MemoryType.SHORT_TERM)
+		if not data:
+			return False
+		last_activity = data.get("last_activity", 0)
+		if time.time() - last_activity > (self.session_timeout * 60):
+			return False
+		self.current_session = SessionState(
+			session_id=data["session_id"],
+			start_time=data["start_time"],
+			last_activity=data["last_activity"],
+			state=data["state"],
+			metadata=data["metadata"],
+		)
+		interactions_data = self.memory_store.retrieve(
+			f"interactions_{self.current_session.session_id}", MemoryType.SHORT_TERM
+		)
+		if interactions_data:
+			self.interactions = [
+				Interaction(
+					interaction_id=i["interaction_id"],
+					interaction_type=i["interaction_type"],
+					timestamp=i["timestamp"],
+					data=i["data"],
+					metadata=i["metadata"],
+				)
+				for i in interactions_data
+			]
+		return True
+
+	def _save_session(self):
+		if not self.current_session:
+			return
+		self.current_session.last_activity = time.time()
+		self.memory_store.store(
+			"current_session",
+			{
+				"session_id": self.current_session.session_id,
+				"start_time": self.current_session.start_time,
+				"last_activity": self.current_session.last_activity,
+				"state": self.current_session.state,
+				"metadata": self.current_session.metadata,
+			},
+			MemoryType.SHORT_TERM,
+			expiry=time.time() + ((self.session_timeout + 5) * 60),
+		)
+		if self.interactions:
+			self.memory_store.store(
+				f"interactions_{self.current_session.session_id}",
+				[
+					{
+						"interaction_id": i.interaction_id,
+						"interaction_type": i.interaction_type,
+						"timestamp": i.timestamp,
+						"data": i.data,
+						"metadata": i.metadata,
+					}
+					for i in self.interactions
+				],
+				MemoryType.SHORT_TERM,
+				expiry=time.time() + ((self.session_timeout + 5) * 60),
+			)
+
+	def start_session(self, metadata: Optional[Dict[str, Any]] = None) -> str:
+		sid = str(uuid.uuid4())
+		now = time.time()
+		self.current_session = SessionState(
+			session_id=sid,
+			start_time=now,
+			last_activity=now,
+			metadata=metadata or {},
+		)
+		self.interactions = []
+		self._save_session()
+		return sid
+
+	def end_session(self) -> bool:
+		if not self.current_session:
+			return False
+		self.memory_store.delete("current_session", MemoryType.SHORT_TERM)
+		self.memory_store.delete(
+			f"interactions_{self.current_session.session_id}", MemoryType.SHORT_TERM
+		)
+		self.current_session = None
+		self.interactions = []
+		return True
+
+	def record_interaction(
+		self, interaction_type: str, data: Dict[str, Any], metadata: Optional[Dict[str, Any]] = None
+	) -> Optional[str]:
+		if not self.current_session:
+			logger.warning("Cannot record interaction: No active session")
+			return None
+		iid = str(uuid.uuid4())
+		self.interactions.append(
+			Interaction(
+				interaction_id=iid,
+				interaction_type=interaction_type,
+				timestamp=time.time(),
+				data=data,
+				metadata=metadata or {},
+			)
+		)
+		if len(self.interactions) > 1000:
+			self.interactions = self.interactions[-1000:]
+		self._save_session()
+		self._trigger_handlers(self.interactions[-1])
+		return iid
+
+	def get_state(self, key: Optional[str] = None):
+		if not self.current_session:
+			return None
+		return self.current_session.state.get(key) if key else self.current_session.state.copy()
+
+	def update_state(self, updates: Dict[str, Any]) -> bool:
+		if not self.current_session:
+			return False
+		self.current_session.state.update(updates)
+		self._save_session()
+		return True
+
+	def get_recent_interactions(self, interaction_type: Optional[str] = None, limit: int = 10):
+		items = self.interactions
+		if interaction_type:
+			items = [i for i in items if i.interaction_type == interaction_type]
+		return [
+			{
+				"interaction_id": i.interaction_id,
+				"interaction_type": i.interaction_type,
+				"timestamp": i.timestamp,
+				"data": i.data,
+				"metadata": i.metadata,
+			}
+			for i in sorted(items, key=lambda x: x.timestamp, reverse=True)[:limit]
+		]
+
+	def register_interaction_handler(self, interaction_type: str, handler: Callable):
+		self.interaction_handlers.setdefault(interaction_type, []).append(handler)
+
+	def _trigger_handlers(self, interaction: Interaction):
+		for h in self.interaction_handlers.get(interaction.interaction_type, []):
+			try:
+				h(interaction)
+			except Exception as e:
+				logger.error("Error in interaction handler: %s", e)
+
+	def get_session_duration(self) -> Optional[float]:
+		if not self.current_session:
+			return None
+		return time.time() - self.current_session.start_time
+
+	def is_session_active(self) -> bool:
+		if not self.current_session:
+			return False
+		if time.time() - self.current_session.last_activity > (self.session_timeout * 60):
+			self.end_session()
+			return False
+		return True
+
+	def keep_alive(self) -> bool:
+		if not self.current_session:
+			return False
+		self.current_session.last_activity = time.time()
+		self._save_session()
+		return True

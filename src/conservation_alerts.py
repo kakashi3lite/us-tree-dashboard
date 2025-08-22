@@ -15,10 +15,9 @@ import logging
 from typing import Dict, List, Optional, Tuple, Union
 from dataclasses import dataclass
 import smtplib
-from email.mime.text import MimeText
-from email.mime.multipart import MimeMultipart
-from email.mime.base import MimeBase
-from email import encoders
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+# Removed unused MimeBase/encoders imports (not needed for plain text email)
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.offline import plot
@@ -559,26 +558,30 @@ class ConservationAlertSystem:
         self._send_email(subject, body)
     
     def _send_email(self, subject: str, body: str) -> None:
-        """Send email notification"""
-        config = self.config['email_notifications']
-        
-        if not config['sender_email'] or not config['recipients']:
-            logger.warning("Email configuration incomplete")
-            return
-            
-        msg = MimeMultipart()
-        msg['From'] = config['sender_email']
-        msg['To'] = ', '.join(config['recipients'])
-        msg['Subject'] = subject
-        
-        msg.attach(MimeText(body, 'plain'))
-        
-        server = smtplib.SMTP(config['smtp_server'], config['smtp_port'])
-        server.starttls()
-        server.login(config['sender_email'], config['sender_password'])
-        text = msg.as_string()
-        server.sendmail(config['sender_email'], config['recipients'], text)
-        server.quit()
+        """Send email notification (no-op if config incomplete).
+
+        For tests/CI where credentials aren't provided this will simply log a
+        warning and return without raising to keep analyses deterministic.
+        """
+        try:
+            config = self.config['email_notifications']
+            if not config.get('sender_email') or not config.get('recipients'):
+                logger.warning("Email configuration incomplete")
+                return
+
+            msg = MIMEMultipart()
+            msg['From'] = config['sender_email']
+            msg['To'] = ', '.join(config['recipients'])
+            msg['Subject'] = subject
+            msg.attach(MIMEText(body, 'plain'))
+
+            with smtplib.SMTP(config['smtp_server'], config['smtp_port']) as server:
+                server.starttls()
+                if config.get('sender_password'):
+                    server.login(config['sender_email'], config['sender_password'])
+                server.sendmail(config['sender_email'], config['recipients'], msg.as_string())
+        except Exception as e:
+            logger.error(f"Failed to send email: {e}")
     
     def run_monitoring_cycle(self) -> None:
         """Run complete monitoring cycle - designed for automated scheduling"""

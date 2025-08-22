@@ -13,9 +13,12 @@ from .base import BaseMetric, MetricSeries
 
 @dataclass
 class PerformanceMetric(BaseMetric):
-    """System performance metric."""
-    component: str
-    metric_type: str
+    """System performance metric.
+
+    Defaults ensure compatibility with BaseMetric field ordering.
+    """
+    component: str = ""
+    metric_type: str = ""
     percentiles: Optional[Dict[str, float]] = None
 
     def validate(self) -> bool:
