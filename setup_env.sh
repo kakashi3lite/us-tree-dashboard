@@ -4,7 +4,7 @@
 set -e
 
 #----------------------------------------
-# 1. Verify Python 3.9 or higher is available
+# 1. Verify Python 3.11 or higher is available
 #----------------------------------------
 
 # Extract the major.minor version from python3 --version
@@ -14,8 +14,8 @@ PYTHON_VERSION=$(python3 --version 2>&1 | awk '{print $2}')
 python3 - <<'PYCHECK'
 import sys
 major, minor = sys.version_info[:2]
-if major < 3 or (major == 3 and minor < 9):
-    sys.exit('Python 3.9 or higher is required.')
+if major < 3 or (major == 3 and minor < 11):
+    sys.exit('Python 3.11 or higher is required.')
 PYCHECK
 
 #----------------------------------------
